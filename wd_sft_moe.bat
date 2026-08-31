@@ -1,22 +1,21 @@
 @echo off
 REM ============================================================
-REM  MiniMind 训练看门狗
+REM  MiniMind 训练看门狗 —— MoE full_sft 阶段
 REM  作用：训练进程意外退出时自动重启，靠 --from_resume 1 从最近的
-REM        checkpoint 续上（存盘间隔 10 步，单次中断最多损失约 37 秒）
+REM        checkpoint 续上
 REM
 REM  安全性：启动时若发现同名训练脚本已在运行，会先等它结束再接管，
 REM          不会起第二个进程抢显存 / 抢 checkpoint
 REM
-REM  换任务时只需改下面 CONFIG 区
-REM  启动：powershell -c "Start-Process watchdog.bat -WindowStyle Hidden"
+REM  启动：powershell -c "Start-Process wd_sft_moe.bat -WindowStyle Hidden"
 REM ============================================================
 
 REM ---------------- CONFIG ----------------
 set PYEXE=C:\Users\Admin\anaconda3\envs\minimind\python.exe
-set SCRIPTNAME=train_pretrain.py
-set TRAIN=train_pretrain.py --use_moe 1 --save_weight pretrain --batch_size 16 --accumulation_steps 16 --num_workers 4 --from_resume 1
-set LOGFILE=C:\baidunetdiskdownload\Project\minimind\pretrain_moe.log
-set DONEMARK=Epoch:[2/2](79390/79390)
+set SCRIPTNAME=train_full_sft.py
+set TRAIN=train_full_sft.py --use_moe 1 --from_weight pretrain --save_weight full_sft --batch_size 6 --accumulation_steps 3 --num_workers 4 --from_resume 1
+set LOGFILE=C:\baidunetdiskdownload\Project\minimind\sft_moe.log
+set DONEMARK=Epoch:[2/2](150953/150953)
 set MAXRETRY=30
 REM ----------------------------------------
 
