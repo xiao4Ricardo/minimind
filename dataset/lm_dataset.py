@@ -3,6 +3,7 @@ import torch
 import json
 import os
 import random
+import dataset.sac_compat  # noqa: F401  # 必须先于 datasets 导入，见该模块说明
 from datasets import load_dataset, Features, Sequence, Value
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 

@@ -4,7 +4,7 @@ import sys
 __package__ = "trainer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
+import dataset.sac_compat  # noqa: F401  # 须先于 torch 导入 datasets（issue #771 DLL 顺序），并绕开 Smart App Control 对 pyarrow.dataset 的拦截
 import argparse
 import math
 import re
