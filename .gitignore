@@ -24,3 +24,10 @@ grpo.log
 
 # 个人简历（含真实姓名/电话/邮箱，切勿提交到公开仓库）
 cv/
+
+# 本地进度查看脚本
+progress.ps1
+
+# MoE 预训练日志
+pretrain_moe.log
+sft_moe.log
