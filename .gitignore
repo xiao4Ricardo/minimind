@@ -4,3 +4,23 @@ __pycache__/
 out
 website/
 docs-minimind/
+# IDE / 本地工具配置
+.idea/
+.vscode/
+pyrefly.toml
+
+# 本地下载的数据集（体积达 GB 级，切勿提交）
+dataset/*.jsonl
+dataset/.msc
+dataset/._____temp/
+
+# 训练产物
+checkpoints/
+
+# 本地训练启动脚本 / 日志
+run_cispo.bat
+cispo.log
+grpo.log
+
+# 个人简历（含真实姓名/电话/邮箱，切勿提交到公开仓库）
+cv/
