@@ -31,3 +31,5 @@ progress.ps1
 # MoE 预训练日志
 pretrain_moe.log
 sft_moe.log
+
+chain_moe.log
