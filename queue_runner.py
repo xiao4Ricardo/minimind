@@ -27,6 +27,7 @@ STAGES = [
         "args": "--use_moe 1 --from_weight pretrain --save_weight full_sft "
                 "--batch_size {bs} --accumulation_steps 3 --num_workers 4 --from_resume 1",
         "requires": ["out/pretrain_768_moe.pth"],
+        "wait_marker": ("pretrain_moe.log", "Epoch:[2/2](79390/79390)"),
         "wait_exit": ["train_pretrain.py"],
         "produces": "out/full_sft_768_moe.pth",
     },
@@ -118,6 +119,19 @@ def run_stage(stage):
         if marker_in(logpath, done_marker) and os.path.exists(os.path.join(ROOT, stage["produces"])):
             log(f"跳过「{name}」：日志已有完成标记且权重已存在")
             return True
+
+    # ---- 等前置阶段真的跑完 ----
+    # 光看"进程没了"不够：前置若是崩了退出，它的看门狗会在 30 秒后重新拉起，
+    # 而这 30 秒里进程确实不在，队列会误判成"跑完了"从而抢显存把两个训练
+    # 一起跑。所以必须先等日志里出现完成标记，再等进程退出。
+    wm = stage.get("wait_marker")
+    if wm:
+        wlog, wmark = os.path.join(ROOT, wm[0]), wm[1]
+        if not marker_in(wlog, wmark):
+            log(f"「{name}」等待前置完成标记 {wmark} …")
+            while not marker_in(wlog, wmark):
+                time.sleep(30)
+        log(f"  前置完成标记已出现")
 
     # ---- 等前置进程退出 ----
     for script in stage["wait_exit"]:
