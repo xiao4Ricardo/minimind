@@ -33,3 +33,7 @@ pretrain_moe.log
 sft_moe.log
 
 chain_moe.log
+
+distill_moe.log
+opd.log
+queue.log
