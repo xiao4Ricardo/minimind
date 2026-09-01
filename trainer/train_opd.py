@@ -187,6 +187,8 @@ if __name__ == "__main__":
     parser.add_argument('--teacher_num_layers', default=8, type=int, help="教师隐藏层数量")
     parser.add_argument('--teacher_use_moe', default=1, type=int, choices=[0, 1], help="教师是否使用MoE")
     parser.add_argument('--from_teacher_weight', default='full_sft', type=str, help="教师基于哪个权重")
+    parser.add_argument('--teacher_dtype', default='bfloat16', type=str, choices=['bfloat16', 'float16', 'float32'],
+                        help="教师权重存放精度，教师只前向不回传，半精度足够且省显存")
     # ---- OPD 超参（对齐 verl distillation_loss.*）----
     parser.add_argument('--loss_mode', default='k3', type=str,
                         choices=['k3', 'forward_kl', 'forward_kl_topk'], help="散度类型")
@@ -243,6 +245,15 @@ if __name__ == "__main__":
     # 教师（冻结）
     teacher_model, _ = init_model(teacher_config, args.from_teacher_weight, device=args.device)
     teacher_model = teacher_model.eval().requires_grad_(False)
+    # 教师只产 logits 当 KL 目标，不回传梯度，半精度存放足够。
+    # 注意教师前向在 no_grad 里但不在 autocast 里，所以 fp32 权重会让整个
+    # 前向和 [B, S-1, 6400] 的 logits 都跑在 fp32 上。198M 的 MoE 教师
+    # 光权重就 793MB，转 bf16 后 396MB，logits 也减半 —— 这张 8GB 卡上
+    # GRPO(actor+ref) 已经用到 6.89GB，省下的正是仅剩的那点余量。
+    # 下游 t_logits 会 .float() 回来算散度，数值精度不受影响。
+    if args.teacher_dtype != 'float32':
+        teacher_model = teacher_model.to(dtype=torch.bfloat16 if args.teacher_dtype == 'bfloat16' else torch.float16)
+    Logger(f'教师权重精度: {args.teacher_dtype}')
     Logger(f'教师: hidden={args.teacher_hidden_size} layers={args.teacher_num_layers} '
            f'moe={bool(args.teacher_use_moe)} weight={args.from_teacher_weight}')
     Logger(f'OPD 配置: loss_mode={args.loss_mode} topk={args.topk} '

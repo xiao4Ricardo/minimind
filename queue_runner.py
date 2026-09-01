@@ -51,7 +51,12 @@ STAGES = [
         "rows": RLAIF_ROWS, "epochs": 1, "batch_size": 1,
         "args": "--teacher_use_moe 1 --from_teacher_weight full_sft --from_weight full_sft "
                 "--save_weight opd --batch_size {bs} --num_generations 6 --max_seq_len 512 "
-                "--max_gen_len 256 --num_workers 2 --from_resume 1",
+                "--max_gen_len 256 --num_workers 2 --teacher_dtype bfloat16 --from_resume 1",
+        # rollout 带 KV cache，显存行为和固定 seq 的前向不一样，探针模拟不可靠，
+        # 所以改用降级梯子兜底：装不下就收缩生成规模重来。
+        "ladder": ["", "--num_generations 4", "--num_generations 4 --max_gen_len 192",
+                   "--num_generations 2 --max_gen_len 192"],
+        "retries_per_rung": 3,
         "requires": ["out/full_sft_768_moe.pth", "out/full_sft_768.pth"],
         "wait_exit": [],
         "produces": "out/opd_768.pth",
@@ -138,18 +143,31 @@ def run_stage(stage):
     done_marker = f"Epoch:[{stage['epochs']}/{stage['epochs']}]({iters}/{iters})"
     log(f"启动「{name}」 bs={bs}  共 {iters}×{stage['epochs']} 步  完成标记 {done_marker}")
 
-    cmd = [PYEXE, "-u", stage["script"]] + stage["args"].format(bs=bs).split()
-    for attempt in range(1, MAXRETRY + 1):
-        log(f"  第 {attempt} 次拉起 {stage['script']}")
-        with open(logpath, "a", encoding="utf-8") as lf:
-            subprocess.run(cmd, cwd=os.path.join(ROOT, "trainer"),
-                           stdout=lf, stderr=subprocess.STDOUT)
-        if marker_in(logpath, done_marker):
-            log(f"✅「{name}」完成（共拉起 {attempt} 次）")
-            return True
-        log(f"  异常退出，30 秒后重试")
-        time.sleep(30)
-    log(f"❌「{name}」连续 {MAXRETRY} 次失败，队列中止")
+    base = stage["args"].format(bs=bs)
+    # 降级梯子：同一套参数反复重试对付不了"装不下"。连续失败若干次后自动
+    # 收缩生成规模再试。梯子只动生成参数、不动 batch_size，所以 iters 和
+    # 完成标记保持不变，--from_resume 也能接着之前的进度走。
+    ladder = stage.get("ladder") or [""]
+    per_rung = stage.get("retries_per_rung", 3)
+    attempt = 0
+    for rung, extra in enumerate(ladder, 1):
+        cmd = [PYEXE, "-u", stage["script"]] + (base + " " + extra).split()
+        if extra:
+            log(f"  降级到第 {rung}/{len(ladder)} 档：{extra}")
+        for _ in range(per_rung):
+            attempt += 1
+            if attempt > MAXRETRY:
+                break
+            log(f"  第 {attempt} 次拉起 {stage['script']}")
+            with open(logpath, "a", encoding="utf-8") as lf:
+                subprocess.run(cmd, cwd=os.path.join(ROOT, "trainer"),
+                               stdout=lf, stderr=subprocess.STDOUT)
+            if marker_in(logpath, done_marker):
+                log(f"✅「{name}」完成（共拉起 {attempt} 次，第 {rung} 档）")
+                return True
+            log(f"  异常退出，30 秒后重试")
+            time.sleep(30)
+    log(f"❌「{name}」{attempt} 次尝试、{len(ladder)} 档降级后仍失败，队列中止")
     return False
 
 
