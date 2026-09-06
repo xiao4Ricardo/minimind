@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from model.model_minimind import MiniMindConfig, MiniMindForCausalLM
-from dataset.lm_dataset import PretrainDataset
+from dataset.lm_dataset import PretrainDataset, SFTDataset
 
 DEV = "cuda:0"
 
@@ -25,7 +25,12 @@ def evaluate(weight, moe, loader, hidden, layers):
     cfg = MiniMindConfig(hidden_size=hidden, num_hidden_layers=layers, use_moe=bool(moe))
     model = MiniMindForCausalLM(cfg)
     path = f"out/{weight}_{hidden}{'_moe' if moe else ''}.pth"
-    model.load_state_dict(torch.load(path, map_location="cpu"), strict=False)
+    # strict=False 会静默放过"权重没装进去"这种错（比如把 dense 权重塞进 MoE 骨架，
+    # 专家层就全是随机初始化，PPL 会离谱但不报错）。所以把缺失的键数量打出来。
+    missing, unexpected = model.load_state_dict(torch.load(path, map_location="cpu"), strict=False)
+    real_missing = [k for k in missing if "freqs_c" not in k and "mask" not in k]
+    if real_missing:
+        print(f"  ⚠ {path} 缺失 {len(real_missing)} 个权重键，例如 {real_missing[:3]}")
     model = model.to(DEV).eval().requires_grad_(False)
     n_params = sum(p.numel() for p in model.parameters())
 
@@ -48,6 +53,8 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--weights", nargs="+", required=True, help="形如 pretrain:0 pretrain:1")
     p.add_argument("--data", default="dataset/pretrain_t2t_mini.jsonl")
+    p.add_argument("--task", default="pretrain", choices=["pretrain", "sft"],
+                   help="pretrain=整段文本都算 loss；sft=对话格式，只对 assistant 回答算 loss")
     p.add_argument("--batches", type=int, default=200)
     p.add_argument("--batch_size", type=int, default=8)
     p.add_argument("--max_seq_len", type=int, default=340)
@@ -57,7 +64,8 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     tok = AutoTokenizer.from_pretrained("model")
-    ds = PretrainDataset(args.data, tok, max_length=args.max_seq_len)
+    DS = PretrainDataset if args.task == "pretrain" else SFTDataset
+    ds = DS(args.data, tok, max_length=args.max_seq_len)
     # 固定随机子集，保证所有模型看到完全相同的数据
     g = torch.Generator().manual_seed(args.seed)
     idx = torch.randperm(len(ds), generator=g)[: args.batches * args.batch_size].tolist()
