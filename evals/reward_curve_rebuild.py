@@ -43,6 +43,11 @@ CKPTS = [
     ("PPO   step 19502",            "out/ppo_actor_768.pth"),
     ("DPO   （对照）",               "out/dpo_lr5e7_768.pth"),
     ("Agentic RL",                  "out/agent_768.pth"),
+    # 蒸馏支线：此前只测了对齐支线，蒸馏这条缺奖励模型口径的数据，
+    # 导致"离线蒸馏改善了困惑度却没改善生成质量"这条结论缺一块闭环证据。
+    ("离线蒸馏 full_dist",           "out/full_dist_768.pth"),
+    ("OPD 在线蒸馏",                 "out/opd_768.pth"),
+    ("MoE 教师 full_sft_moe",       "out/full_sft_768_moe.pth"),
 ]
 
 def rep_penalty(text, n=3, cap=0.5):
@@ -85,8 +90,11 @@ print("  完成\n", flush=True)
 autocast_ctx = torch.amp.autocast("cuda", dtype=torch.bfloat16)
 results = {}
 for tag, path in CKPTS:
+    # 权重文件名带 _moe 的必须建 MoE 骨架，否则 strict=False 会静默放过，
+    # 专家层保持随机初始化 —— 不报错，只是打分离谱。
+    is_moe = "_moe" in os.path.basename(path)
     cfg = MiniMindConfig(hidden_size=768, num_hidden_layers=8,
-                         max_seq_len=MAX_SEQ + MAX_GEN)
+                         max_seq_len=MAX_SEQ + MAX_GEN, use_moe=is_moe)
     m = MiniMindForCausalLM(cfg)
     miss, _ = m.load_state_dict(torch.load(path, map_location="cpu"), strict=False)
     rm_keys = [k for k in miss if "freqs_c" not in k and "mask" not in k]

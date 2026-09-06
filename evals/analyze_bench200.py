@@ -39,7 +39,7 @@ def paired(a, b, B=10000, seed=0):
     idx = rng.integers(0, n, (B, n))
     boot = d[idx].mean(axis=1)
     lo, hi = np.percentile(boot, [2.5, 97.5])
-    p = 2 * min((boot >= 0).mean(), (boot <= 0).mean())
+    p = min(1.0, 2 * min((boot >= 0).mean(), (boot <= 0).mean()))  # 截断：全零差值会算出 p>1
     return d.mean(), lo, hi, p
 
 
