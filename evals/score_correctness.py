@@ -33,6 +33,19 @@ def _rep3(text, n=3):
     return (len(g) - len(set(g))) / len(g) if g else 0.0
 
 
+def response_diversity(outs, n=25):
+    """不同开头数 / 总题数 —— 检测"答非所问的模式坍缩"。
+
+    为什么需要这第三道防线：官方 PPO 权重在 200 题上复读率 12.2%（全场第 2 好）、
+    长度 417（全场最长）、空答案率 0.0%，把"长度守卫"和"空答案守卫"全部绕过，
+    但它对 200 道题只产出 44 种不同开头，其中两种占了 105 道 —— 无论问什么都回同
+    一篇散文。前两道防线是照着已见过的失败模式设计的，新模式一来就全失效。
+
+    这个指标不依赖答案内容，纯粹看"模型是否在回应不同的输入"。"""
+    heads = {" ".join(o["text"].split())[:n] for o in outs}
+    return len(heads) / len(outs)
+
+
 def strip_think(t):
     """只取 </think> 之后的答案部分；没有该标记则整段都算答案。
 
@@ -153,14 +166,16 @@ def main():
                         for i in ins_idx])
         empty = np.mean([1.0 if len(x) < 10 else 0.0 for x in ans])
         S[n] = {"acc": acc, "ins": ins, "empty": empty,
-                "alen": np.mean([len(x) for x in ans])}
+                "alen": np.mean([len(x) for x in ans]),
+                "div": response_diversity(outs)}
 
-    print(f"{'模型':<14}{'准确率':>9}{'指令遵循':>10}{'答案为空':>10}{'答案长度':>10}")
-    print("-" * 54)
+    print(f"{'模型':<14}{'准确率':>9}{'指令遵循':>10}{'答案为空':>10}{'答案长度':>10}{'回复多样性':>12}")
+    print("-" * 66)
     for n in sorted(S, key=lambda n: -S[n]["acc"].mean()):
         s = S[n]
+        warn = "  ⚠坍缩" if s["div"] < 0.5 else ""
         print(f"{n:<14}{s['acc'].mean():>8.1%}{s['ins'].mean():>10.1%}"
-              f"{s['empty']:>10.1%}{s['alen']:>10.0f}")
+              f"{s['empty']:>10.1%}{s['alen']:>10.0f}{s['div']:>11.1%}{warn}")
 
     base = a.baseline
     # 退化模型（答案为空占比高）在这两个指标上没有可解释性，单列出来不参与排序比较

@@ -41,3 +41,12 @@ ppo.log
 agent.log
 bench200.log
 agent_watchdog.log
+seedtest_*.log
+seed_*.log
+seed_cispo_s*.log
+seed_variance_rl.log
+bench200_ref.log
+bench200_seeds.log
+out/ref_*.pth
+out/cispo_s4*.pth
+out/full_dist_s4*.pth
