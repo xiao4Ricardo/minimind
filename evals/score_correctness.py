@@ -122,9 +122,51 @@ INSTR_RULES = {
     "请把下面这句话翻译成英文：今天天气很好。": lambda t: sum(c.isascii() and c.isalpha() for c in t) > len(t) * 0.4,
     "给一家新开的咖啡店写一句广告语。":    lambda t: len(t) <= 80,
     "为一个环保公益活动写一句口号。":      lambda t: len(t) <= 80,
-    "把这句话改成疑问句：他明天要去北京。": lambda t: "？" in t or "?" in t,
     "请把这段话缩短一半：读书能够开阔我们的眼界，增长我们的见识，让我们了解更广阔的世界。": lambda t: len(t) <= 40,
+    "把下面内容改成要点形式：早睡早起多喝水多运动少熬夜。": lambda t: _list_items(t) >= 3,
+    "用更简洁的话说：由于天气原因导致航班发生了延误的情况。": lambda t: len(t) <= 24,
+    "请把这句话扩写：他很努力。": lambda t: len(t) >= 30,
+    "怎样管理个人财务？给几条实用建议。": lambda t: _list_items(t) >= 2,
+    "写一首关于春天的短诗。": lambda t: len(t) <= 120 and len([x for x in t.splitlines() if x.strip()]) >= 2,
+    "写一封感谢老师的短信。": lambda t: len(t) <= 200,
+    "写一条推荐一本书的朋友圈文案。": lambda t: len(t) <= 200,
+    "把这句话改成疑问句：他明天要去北京。": lambda t: ("？" in t or "?" in t) and len(t) <= 60,
 }
+
+
+
+# ---- 相关性规则：题目点名两个对象，答案必须同时提到 ----
+# 这是第四道守卫，也是唯一能抓住"答非所问式模式坍缩"的行为指标：
+# 官方 PPO 无论问什么都回同一篇 AI 伦理散文，既不提猫也不提狗，
+# 而它在复读率(12.2%,全场第2)、长度(417,最长)、空答案率(0.0%)三项上全部通过。
+RELEVANCE_RULES = {
+    "猫和狗哪个更适合公寓饲养？": (["猫"], ["狗"]),
+    "读纸质书和电子书各有什么优缺点？": (["纸质", "纸书"], ["电子书", "电子"]),
+    "坐高铁和坐飞机出行，该怎么选？": (["高铁", "火车"], ["飞机", "航班"]),
+    "自己做饭和点外卖，哪个更划算？": (["做饭", "自己做", "下厨"], ["外卖"]),
+    "台式机和笔记本电脑该怎么选？": (["台式"], ["笔记本"]),
+    "跑步和游泳哪个减脂效果更好？": (["跑步"], ["游泳"]),
+    "租房和买房各有什么考量？": (["租房", "租"], ["买房", "购房"]),
+    "线上学习和线下课堂有什么区别？": (["线上", "网课", "在线"], ["线下", "课堂", "面授"]),
+    "咖啡和茶，哪个提神效果更好？": (["咖啡"], ["茶"]),
+    "手动挡和自动挡汽车怎么选？": (["手动"], ["自动"]),
+    "大公司和创业公司，应届生该去哪个？": (["大公司", "大厂"], ["创业", "初创", "小公司"]),
+    "早起学习和熬夜学习哪个效率高？": (["早起", "早晨", "清晨"], ["熬夜", "夜晚", "晚上"]),
+    "现金支付和移动支付各有什么利弊？": (["现金"], ["移动支付", "电子支付", "手机支付", "扫码"]),
+    "中医和西医有什么不同的思路？": (["中医"], ["西医"]),
+    "养绿萝和多肉哪个更好打理？": (["绿萝"], ["多肉"]),
+    "看电影和看小说，哪种体验更丰富？": (["电影"], ["小说", "书"]),
+    "地铁通勤和骑车通勤怎么选？": (["地铁"], ["骑车", "自行车", "单车"]),
+    "Windows 和 macOS 的主要区别是什么？": (["windows", "win"], ["mac", "苹果"]),
+    "存款和投资理财该怎么平衡？": (["存款", "储蓄"], ["投资", "理财"]),
+    "独居和合租各有什么优缺点？": (["独居", "一个人住"], ["合租", "室友"]),
+}
+
+
+def hits_both(ans, pair):
+    """答案是否同时提到被比较的两个对象"""
+    low = ans.lower()
+    return all(any(k.lower() in low for k in side) for side in pair)
 
 
 def paired(a, b, B=10000, seed=0):
@@ -150,8 +192,9 @@ def main():
     acc_rules = {**FACT_RULES, **MATH_RULES}
     acc_idx = [i for i, q in enumerate(qs) if q in acc_rules]
     ins_idx = [i for i, q in enumerate(qs) if q in INSTR_RULES]
+    rel_idx = [i for i, q in enumerate(qs) if q in RELEVANCE_RULES]
     print(f"准确率题目 {len(acc_idx)} 道（事实 {len(FACT_RULES)} + 计算 {len(MATH_RULES)}）")
-    print(f"指令遵循题目 {len(ins_idx)} 道")
+    print(f"指令遵循题目 {len(ins_idx)} 道；相关性题目 {len(rel_idx)} 道（须同时提到被比较的两个对象）")
     print("答案一律取 </think> 之后的部分 —— 否则会把思考段当答案给模型送分\n")
 
     S = {}
@@ -164,18 +207,19 @@ def main():
         # 指令遵循率（60%），而它们 84% / 67% 的答案根本是空的。
         ins = np.array([1.0 if len(ans[i]) >= 10 and INSTR_RULES[qs[i]](ans[i]) else 0.0
                         for i in ins_idx])
+        rel = np.array([1.0 if hits_both(ans[i], RELEVANCE_RULES[qs[i]]) else 0.0 for i in rel_idx])
         empty = np.mean([1.0 if len(x) < 10 else 0.0 for x in ans])
-        S[n] = {"acc": acc, "ins": ins, "empty": empty,
+        S[n] = {"acc": acc, "ins": ins, "rel": rel, "empty": empty,
                 "alen": np.mean([len(x) for x in ans]),
                 "div": response_diversity(outs)}
 
-    print(f"{'模型':<14}{'准确率':>9}{'指令遵循':>10}{'答案为空':>10}{'答案长度':>10}{'回复多样性':>12}")
-    print("-" * 66)
+    print(f"{'模型':<14}{'准确率':>9}{'指令遵循':>10}{'相关性':>9}{'答案为空':>10}{'长度':>7}{'多样性':>9}")
+    print("-" * 74)
     for n in sorted(S, key=lambda n: -S[n]["acc"].mean()):
         s = S[n]
         warn = "  ⚠坍缩" if s["div"] < 0.5 else ""
         print(f"{n:<14}{s['acc'].mean():>8.1%}{s['ins'].mean():>10.1%}"
-              f"{s['empty']:>10.1%}{s['alen']:>10.0f}{s['div']:>11.1%}{warn}")
+              f"{s['rel'].mean():>8.1%}{s['empty']:>10.1%}{s['alen']:>10.0f}{s['div']:>9.1%}{warn}")
 
     base = a.baseline
     # 退化模型（答案为空占比高）在这两个指标上没有可解释性，单列出来不参与排序比较
@@ -185,7 +229,7 @@ def main():
         tags = ", ".join("{}({:.0%})".format(n, S[n]["empty"]) for n in degen)
         print(f"\n以下模型答案为空的比例过高，其指标无可解释性，不参与比较：{tags}")
 
-    for key, label in [("acc", "准确率"), ("ins", "指令遵循")]:
+    for key, label in [("acc", "准确率"), ("ins", "指令遵循"), ("rel", "相关性")]:
         print(f"\n{label} vs 基线 {base}（配对自助法，仅非退化模型）")
         print(f"{'模型':<14}{'Δ':>9}{'95% CI':>20}{'p':>9}  结论")
         print("-" * 60)
