@@ -3,53 +3,31 @@
 > 从一个 token 走完整条训练链路
 >
 > 骨架 hidden 768 · 8 层 · vocab 6400 ｜ 注意力 GQA 8Q/4KV · head_dim 96
-> 参数量 dense 63.91M / MoE 198.42M-A63.94M ｜ 实测环境 单卡 RTX 5060 8GB · 86 GPU 小时
+> 参数量 dense 63.91M / MoE 198.42M-A63.94M ｜ 实测环境 单卡 RTX 5060 8GB · 86.4 GPU 小时
 
-这份手册把 MiniMind 的每一处设计拆到源码行，再拆到它背后的数学。所有参数量、张量形状、超参默认值都取自本仓库 `model/model_minimind.py` 等文件的实际代码，不是从论文或博客转述的通用知识。读完你应该能回答的不只是「RoPE 是什么」，而是「这一行 `torch.cat([cos, cos])` 为什么这么写」。
+这份手册把 MiniMind 的每一处设计拆到源码行，再拆到它背后的数学。每个公式按**「直觉 → 公式 → 逐符号 → 源码对照」**四段展开，第一次学也能跟下来。所有参数量、张量形状、超参默认值都取自本仓库实际代码，不是从论文或博客转述的通用知识。
 
-第五章的实测数据全部来自本仓库在单张 RTX 5060 8GB 上的真实训练，六个阶段合计 86.4 GPU 小时，零崩溃零重拉。
+第七章的实测数据全部来自本仓库在单张 RTX 5060 8GB 上的真实训练，六个阶段合计 86.4 GPU 小时，零崩溃零重拉。
 
 ---
 
 ## 目录
 
-**第一章 · 全局架构**
-- [1.1 六阶段全生命周期](#11-六阶段全生命周期)
-- [1.2 目录结构与模块职责](#12-目录结构与模块职责)
-- [1.3 一个 token 的完整旅程](#13-一个-token-的完整旅程)
+**第一章 · 全局架构** — [1.1 六阶段生命周期](#11-六阶段全生命周期) ｜ [1.2 目录与模块职责](#12-目录结构与模块职责) ｜ [1.3 一个 token 的旅程](#13-一个-token-的完整旅程)
 
-**第二章 · 模型结构**
-- [2.1 配置速查与参数量核算](#21-配置速查与参数量核算)
-- [2.2 RMSNorm vs LayerNorm](#22-rmsnorm-vs-layernorm)
-- [2.3 RoPE 与 YaRN 外推](#23-rope-旋转位置编码)
-- [2.4 GQA · QK-Norm · KV Cache](#24-gqaqk-normkv-cache)
-- [2.5 SwiGLU](#25-swiglu-前馈网络)
-- [2.6 MoE 与负载均衡](#26-moe-与负载均衡)
-- [2.7 权重绑定](#27-权重绑定-tie_word_embeddings)
+**第二章 · 模型结构** — [2.1 配置与参数量核算](#21-配置速查与参数量核算) ｜ [2.2 RMSNorm](#22-rmsnorm-vs-layernorm) ｜ [2.3 RoPE 与 YaRN](#23-rope-旋转位置编码) ｜ [2.4 GQA·QK-Norm·KV Cache](#24-gqa--qk-norm--kv-cache) ｜ [2.5 SwiGLU](#25-swiglu-前馈网络) ｜ [2.6 MoE](#26-moe-与负载均衡) ｜ [2.7 权重绑定](#27-权重绑定-tie_word_embeddings)
 
-**第三章 · 训练机制**
-- [3.1 自回归 Loss 与因果掩码](#31-自回归-loss-与因果掩码)
-- [3.2 Pretrain 与 SFT 的唯一本质差别](#32-pretrain-与-sft-的唯一本质差别)
-- [3.3 学习率调度](#33-学习率调度)
-- [3.4 混合精度 · 累积 · 裁剪](#34-混合精度--梯度累积--梯度裁剪)
-- [3.5 DPO](#35-dpo-直接偏好优化)
-- [3.6 LoRA](#36-lora-低秩适配)
-- [3.7 GRPO / CISPO / PPO](#37-grpo--cispo--ppo-与-agentic-rl)
+**第三章 · 预训练与 SFT** — [3.1 在优化什么](#31-语言模型到底在优化什么) ｜ [3.2 交叉熵与困惑度](#32-交叉熵困惑度与那个-876) ｜ [3.3 Teacher Forcing](#33-teacher-forcing-与那个错位一格) ｜ [3.4 SFT 标签构造](#34-sft唯一的改动是标签) ｜ [3.5 学习率调度](#35-学习率调度) ｜ [3.6 混合精度·累积·裁剪](#36-混合精度--梯度累积--梯度裁剪)
 
-**第四章 · 数据管线**
-- [4.1 Tokenizer 与 BPE](#41-tokenizer-与-byte-level-bpe)
-- [4.2 ChatML 模板](#42-chatml-模板)
-- [4.3 四种 Dataset 对比](#43-四种-dataset-对比)
+**第四章 · LoRA** — [4.1 低秩假设](#41-低秩假设从哪来) ｜ [4.2 前向与反向](#42-前向与反向梯度到底流去哪) ｜ [4.3 显存账](#43-显存账省的到底是什么) ｜ [4.4 两处偏离](#44-本仓库的两处偏离--极佳的面试谈资) ｜ [4.5 合并与 QLoRA](#45-合并回基模与-qlora)
 
-**第五章 · 实测参照**
-- [5.1 资源与耗时参照表](#51-资源与耗时参照表)
-- [5.2 收敛参照](#52-收敛参照loss-降到多少算好)
-- [5.3 效果对比与消融](#53-效果对比与消融)
-- [5.4 8GB 显存工程](#54-8gb-显存工程)
+**第五章 · 对齐与强化学习** — [5.1 为什么需要 RL](#51-为什么-sft-之后还需要-rl) ｜ [5.2 策略梯度](#52-策略梯度定理与-reinforce) ｜ [5.3 基线与优势](#53-基线与优势函数) ｜ [5.4 重要性采样](#54-重要性采样为什么能用旧数据更新) ｜ [5.5 PPO 裁剪](#55-ppo-的裁剪为什么是-min-而不是-clip) ｜ [5.6 GAE](#56-gae优势怎么逐-token-算出来) ｜ [5.7 KL 与 k1/k2/k3](#57-kl-惩罚与-k1--k2--k3-估计量) ｜ [5.8 GRPO](#58-grpo用组内均值当基线) ｜ [5.9 CISPO](#59-cispo与-grpo-只差一行但形式完全不同) ｜ [5.10 DPO](#510-dpo把-rl-变回监督学习) ｜ [5.11 奖励函数](#511-奖励函数本仓库到底怎么打分) ｜ [5.12 总对比](#512-五种算法总对比)
 
-**第六章 · 面试题**
-- [20 题与回答模板](#第六章--面试高频题与回答模板)
-- [附：一页速查](#附一页速查)
+**第六章 · 数据管线** — [6.1 Tokenizer](#61-tokenizer-与-byte-level-bpe) ｜ [6.2 ChatML](#62-chatml-模板) ｜ [6.3 四种 Dataset](#63-四种-dataset-对比)
+
+**第七章 · 实测参照** — [7.1 资源与耗时](#71-资源与耗时参照表) ｜ [7.2 收敛参照](#72-收敛参照) ｜ [7.3 效果对比](#73-效果对比与消融) ｜ [7.4 8GB 显存工程](#74-8gb-显存工程)
+
+**第八章 · 面试题** — [24 题与回答模板](#第八章--面试高频题与回答模板) ｜ [附：一页速查](#附一页速查)
 
 ---
 
@@ -57,54 +35,56 @@
 
 ## 1.1 六阶段全生命周期
 
-MiniMind 不是「拿一个预训练模型微调」，而是**从随机初始化开始、把整条链路走完**。每个阶段的输入是上一阶段的权重，输出是一个新的 `.pth`。理解这条链最重要的一点是：**每一步换的是「学什么信号」，模型结构自始至终没变。**
+MiniMind 不是「拿一个预训练模型微调」，而是**从随机初始化开始把整条链路走完**。理解这条链最重要的一点是：**每一步换的是「学什么信号」，模型结构自始至终没变。**
 
 | 阶段 | 脚本 | 做什么 | 输入 → 输出 |
 | --- | --- | --- | --- |
-| **0 · Tokenizer** | `train_tokenizer.py` | 把文字变成整数。Byte-level BPE，词表 6400。一旦定死，后面所有权重都绑在这个词表上，换词表等于全部重训 | → `model/tokenizer.json` |
-| **1 · Pretrain** | `train_pretrain.py` | 学语言本身。纯文本自回归，**每一个 token 都算 loss**。学到「中文长什么样」，但完全不会对话 —— 你问它问题，它接着往下写文章 | `pretrain_t2t_mini.jsonl` → `pretrain_768.pth` |
-| **2 · SFT** | `train_full_sft.py` | 学对话格式。同样是交叉熵，但**只对 assistant 段落算 loss**，prompt 标 `-100`。这是与 Pretrain 唯一的本质差别 | `sft_t2t_mini.jsonl` → `full_sft_768.pth` |
-| **3 · 偏好对齐** | `train_dpo.py` | 学「人更喜欢哪个」。chosen/rejected 成对数据，不需要奖励模型、不需要采样 | `dpo.jsonl` → `dpo_768.pth` |
-| **4 · 策略优化** | `train_grpo.py` `train_ppo.py` | 学「怎么拿高分」。模型自己采样、奖励模型打分、按优势更新。GRPO/CISPO 用组内相对优势省掉 critic | `rlaif.jsonl` + 奖励模型 → `grpo_768.pth` |
-| **5 · 轻量化/部署** | `train_lora.py` `eval_llm.py` | LoRA 只训 0.39M 参数（占 0.62%）；保存时统一 `.half()` 转 fp16，所以 63.91M 的权重文件只有 131 MB | → `lora_*.pth` |
+| **0 · Tokenizer** | `train_tokenizer.py` | 把文字变成整数。Byte-level BPE，词表 6400。一旦定死，后面所有权重都绑在这个词表上 | → `model/tokenizer.json` |
+| **1 · Pretrain** | `train_pretrain.py` | 学语言本身。**每个 token 都算 loss**。学到「中文长什么样」，但完全不会对话 | `pretrain_t2t_mini.jsonl` → `pretrain_768.pth` |
+| **2 · SFT** | `train_full_sft.py` | 学对话格式。同样的交叉熵，但**只对 assistant 段算 loss** | `sft_t2t_mini.jsonl` → `full_sft_768.pth` |
+| **3 · DPO** | `train_dpo.py` | 学「人更喜欢哪个」。chosen/rejected 成对数据，不需要奖励模型 | `dpo.jsonl` → `dpo_768.pth` |
+| **4 · 策略优化** | `train_grpo.py` `train_ppo.py` | 学「怎么拿高分」。模型自己采样、奖励模型打分、按优势更新 | `rlaif.jsonl` + 奖励模型 → `grpo_768.pth` |
+| **5 · 轻量化** | `train_lora.py` | 只训 0.39M 参数（占 0.62%）；保存统一 `.half()`，63.91M 的权重只有 131 MB | → `lora_*.pth` |
 
-> **面试常问：为什么 SFT 之后还要 DPO / RL？**
+> **这条链的核心逻辑** — 三个阶段学的是三种**信息层级**：
+> - **Pretrain** 学「什么话说得通」——绝对的语言概率
+> - **SFT** 学「这个问题该怎么答」——条件概率，但只有正例
+> - **RL/DPO** 学「A 比 B 好」——**相对**偏好，还带负例
 >
-> SFT 是**模仿**：它只能告诉模型「这个回答是对的」，永远给不出「这个比那个好」，更给不出「这个是错的」。一旦标注数据里存在风格不一致或质量参差，SFT 会把好坏一起学进去。偏好对齐引入的是**相对信号**（A 优于 B）和**负向信号**（不要这样答），这是交叉熵表达不了的。
+> 交叉熵天生只能表达前两种，第三种必须换损失函数，这就是为什么 SFT 之后还要对齐。
 
 ## 1.2 目录结构与模块职责
 
 | 路径 | 职责 | 关键内容 |
 | --- | --- | --- |
 | `model/model_minimind.py` | 模型全部定义 | Config、RMSNorm、RoPE、Attention、FeedForward、MOEFeedForward、Block、CausalLM、自实现 `generate` |
-| `model/model_lora.py` | LoRA 注入 | `apply_lora` 用 monkey-patch 改写 `forward`，不改模型定义 |
-| `model/tokenizer.json` | 词表 | 6400 词，ChatML 特殊 token |
-| `dataset/lm_dataset.py` | 四种数据集 | Pretrain / SFT / DPO / RLAIF，**标签与 mask 的差异全在这里** |
-| `trainer/train_*.py` | 各阶段训练循环 | 每个文件自带 `train_epoch` 与 `argparse`，彼此独立、互不继承 |
-| `trainer/trainer_utils.py` | 公共工具 | `get_lr`、`setup_seed`、`lm_checkpoint`、`SkipBatchSampler`、`init_model` |
-| `trainer/rollout_engine.py` | RL 采样引擎 | 把「策略推理」与「训练」解耦，可插拔换 SGLang |
+| `model/model_lora.py` | LoRA 注入 | `apply_lora` 用猴子补丁改写 `forward`，不改模型定义 |
+| `dataset/lm_dataset.py` | 四种数据集 | **标签与 mask 的差异全在这里** |
+| `trainer/train_*.py` | 各阶段训练循环 | 每个文件自带 `train_epoch` 与 argparse，彼此独立 |
+| `trainer/trainer_utils.py` | 公共工具 | `get_lr`、`setup_seed`、`lm_checkpoint`、`SkipBatchSampler` |
+| `trainer/rollout_engine.py` | RL 采样引擎 | 把策略推理与训练解耦，可换 SGLang |
 
-> **读码顺序建议**：先看 `model_minimind.py`（一个文件读懂整个模型），再看 `lm_dataset.py`（读懂标签怎么造），最后随便挑一个 `train_*.py`（训练循环都长一个样）。**不要从 `train_*.py` 开始读** —— 它们是最容易懂也最没信息量的部分。
+> **读码顺序**：先 `model_minimind.py`（一个文件读懂整个模型），再 `lm_dataset.py`（读懂标签怎么造），最后随便挑一个 `train_*.py`。**不要从 `train_*.py` 开始** —— 它们最容易懂也最没信息量。
 
 ## 1.3 一个 token 的完整旅程
 
-把 batch=1、seq_len=512 的一次前向拆开。**面试时能把形状说对，比背概念有说服力得多。**
+batch=1、seq_len=512 的一次前向。**面试时能把形状说对，比背概念有说服力得多。**
 
 | 步骤 | 算子 | 输出形状 | 说明 |
 | --- | --- | --- | --- |
-| 输入 | `input_ids` | `[1, 512]` | 整数 token id，范围 0–6399 |
+| 输入 | `input_ids` | `[1, 512]` | 整数 token id，0–6399 |
 | 嵌入 | `embed_tokens` | `[1, 512, 768]` | 查表；与 lm_head 共享权重 |
-| × 8 层 | `input_layernorm` | `[1, 512, 768]` | RMSNorm，**Pre-Norm** 位置 |
-| | `q_proj / k_proj / v_proj` | `[1,512,768]` / `[1,512,384]` ×2 | Q 8 头、KV 各 4 头 → GQA |
-| | `q_norm / k_norm` | `[1,512,8,96]` / `[1,512,4,96]` | **QK-Norm**，在 RoPE 之前 |
+| ×8 层 | `input_layernorm` | `[1, 512, 768]` | RMSNorm，**Pre-Norm** |
+| | `q/k/v_proj` | `768 / 384 / 384` | Q 8 头、KV 各 4 头 → GQA |
+| | `q_norm / k_norm` | `[1,512,8,96]` | **QK-Norm**，在 RoPE 之前 |
 | | `apply_rotary_pos_emb` | 同上 | 位置信息在此注入 |
 | | `repeat_kv(n_rep=2)` | `[1,512,8,96]` | KV 头复制 2 份对齐 Q 头 |
-| | SDPA / 朴素注意力 | `[1, 8, 512, 96]` | 因果掩码；朴素路径会实体化 `[1,8,512,512]` |
-| | `o_proj` + 残差 | `[1, 512, 768]` | 再过 post_attention_layernorm → SwiGLU → 残差 |
+| | SDPA / 朴素注意力 | `[1, 8, 512, 96]` | 朴素路径会实体化 `[1,8,512,512]` |
+| | `o_proj` + 残差 | `[1, 512, 768]` | 再过 norm → SwiGLU → 残差 |
 | 输出 | `norm → lm_head` | `[1, 512, 6400]` | 每个位置对全词表的 logits |
-| **损失** | `shift + cross_entropy` | 标量 | logits 掐掉最后一位、labels 掐掉第一位 |
+| **损失** | `shift + cross_entropy` | 标量 | 见 §3.3 |
 
-> **显存直觉**：最后那步 `[1, 512, 6400]` 看着不大，但训练时 batch=16、seq=768 就是 `16×768×6400×4 B ≈ 300 MB`（fp32），反向还要留一份。**词表维度的 logits 往往是小模型训练里最大的单块激活**，这也是 MiniMind 把词表压到 6400 的直接收益。
+> **显存直觉**：最后那步 `[1, 512, 6400]` 看着不大，但训练时 batch=16、seq=768 就是 `16×768×6400×4 B ≈ 300 MB`（fp32），反向还要留一份。**词表维度的 logits 往往是小模型训练里最大的单块激活。**
 
 ---
 
@@ -112,133 +92,108 @@ MiniMind 不是「拿一个预训练模型微调」，而是**从随机初始化
 
 ## 2.1 配置速查与参数量核算
 
-| 配置项 | 值 | 含义 / 为什么是这个值 |
+| 配置项 | 值 | 为什么是这个值 |
 | --- | ---: | --- |
 | `hidden_size` | 768 | 模型宽度 |
-| `num_hidden_layers` | 8 | 深度。浅网络训练快，768 的宽度又不至于模式崩溃 |
+| `num_hidden_layers` | 8 | 浅网络训练快，768 的宽度又不至于模式崩溃 |
 | `num_attention_heads` | 8 | Q 头数 |
-| `num_key_value_heads` | 4 | KV 头数 → `n_rep = 8/4 = 2`，标准 GQA |
+| `num_key_value_heads` | 4 | KV 头数 → `n_rep = 2`，标准 GQA |
 | `head_dim` | 96 | `768 / 8` |
-| `vocab_size` | 6400 | 极小词表。省 embedding 与 logits 显存，代价是同样文本 token 数更多 |
-| `intermediate_size` | 2432 | `ceil(768 × π / 64) × 64` —— 用 π 取约 3.17 倍扩张比再对齐到 64 |
-| `rope_theta` | 1e6 | 比常见的 1e4 大 100 倍，低频维度周期更长，利于长文本 |
-| `rms_norm_eps` | 1e-6 | 数值稳定项 |
-| `tie_word_embeddings` | True | 输入嵌入与输出投影共享权重，省 4.92M 参数 |
-| `num_experts / per_tok` | 4 / 1 | MoE 时生效：4 专家、top-1 路由 |
+| `vocab_size` | 6400 | 极小词表，省 embedding 与 logits 显存 |
+| `intermediate_size` | 2432 | `ceil(768×π/64)×64` —— 约 3.17 倍扩张比再对齐到 64 |
+| `rope_theta` | 1e6 | 比常见的 1e4 大 100 倍，低频周期更长 |
+| `tie_word_embeddings` | True | 输入嵌入与输出投影共享，省 4.92M |
+| `num_experts / per_tok` | 4 / 1 | MoE 时生效 |
 
-### 参数量是怎么算出来的（可手工验算）
-
-面试官很喜欢问「你这 64M 是怎么来的」。逐项拆开如下，三个数字都与训练日志打印的 `Model Params` 完全一致：
+### 参数量核算（可手工验算，与日志逐位吻合）
 
 ```
 每层 = 注意力 1,769,664 + MLP 5,603,328 + 两个 RMSNorm 1,536 = 7,374,528
   ├ 注意力 = q 768×768 + k 768×384 + v 768×384 + o 768×768 + qk_norm 192
   └ MLP    = gate 768×2432 + up 768×2432 + down 2432×768
 
-dense 总计 = 8 × 7,374,528 + embed 4,915,200 + final_norm 768 = 63,912,192 ≈ 63.91M
-
-MoE 每层 = 1,769,664 + [gate 3,072 + 4 × 5,603,328] + 1,536 = 24,187,584
-MoE 总计 = 8 × 24,187,584 + 4,915,200 + 768 = 198,416,640 ≈ 198.42M
-MoE 激活 = top-1 只走 1 个专家 → 8 × 7,377,600 + 4,915,200 + 768 = 63,936,768 ≈ 63.94M
+dense = 8 × 7,374,528 + embed 4,915,200 + final_norm 768 = 63,912,192 ≈ 63.91M
+MoE   = 8 × 24,187,584 + 4,915,200 + 768 = 198,416,640 ≈ 198.42M
+激活   = top-1 只走 1 个专家 → 8 × 7,377,600 + 4,915,200 + 768 = 63,936,768 ≈ 63.94M
 ```
 
-注意 `embed_tokens` **只计一次** —— 因为 `tie_word_embeddings=True`，`lm_head` 与它是同一张权重。这也是日志里 MoE 打印成 `198.42M-A63.94M` 的由来：总参 198M，但每个 token 实际只激活 63.94M，**与 dense 的 63.91M 几乎相同 —— 这正是 MoE 对比实验成立的前提。**
+`embed_tokens` **只计一次** —— 因为 `tie_word_embeddings=True`。日志打印的 `198.42M-A63.94M` 就是这个意思：总参 198M，但每个 token 实际只激活 63.94M，**与 dense 的 63.91M 几乎相同 —— 这正是 MoE 对比实验成立的前提。**
 
 ## 2.2 RMSNorm vs LayerNorm
 
+```
+LayerNorm:  y = γ · (x − μ) / √(σ² + ε) + β    要算均值、方差，还有偏置 β
+RMSNorm:    y = γ · x / √(mean(x²) + ε)        不减均值、无偏置
+```
+
+**直觉**：LayerNorm 是「先把这排数移到以 0 为中心，再缩放到标准长度」；RMSNorm 省掉了移动那一步，**只做缩放**。实践发现减均值在 Transformer 里收益很小，去掉后少一次归约、少一组参数。
+
 ```python
 # model/model_minimind.py · class RMSNorm · L47–56
-def norm(self, x):
-    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
 def forward(self, x):
     return (self.weight * self.norm(x.float())).type_as(x)
     #                              ^^^^^^^^^     ^^^^^^^^^^
 ```
 
-```
-LayerNorm:  y = γ · (x − μ) / √(σ² + ε) + β     （要算均值、方差，还有偏置 β）
-RMSNorm:    y = γ · x / √(mean(x²) + ε)         （不减均值、无偏置）
-```
+> **为什么内部转 fp32**：混合精度下 `x` 是 bf16，而 `x.pow(2).mean()` 是 768 个数的平方和，在 bf16 下**极易溢出或损失精度**。所以先升到 fp32 算归一化，再降回原精度。**「归一化层内部保持 fp32」是所有主流实现的共识。**
 
-**直觉类比**：LayerNorm 是「先把这排数移到以 0 为中心，再缩放到标准长度」；RMSNorm 省掉了移动那一步，**只做缩放**。实践发现 Transformer 里减均值这一步收益很小，去掉后少一次归约、少一组偏置参数，速度更快且效果几乎不变。
-
-> **容易被追问的细节**：`x.float()` 与 `.type_as(x)` 这一对不是多余的。混合精度训练时 `x` 是 bf16，而 `x.pow(2).mean()` 在 bf16 下**极易溢出或损失精度**（768 个数的平方和）。所以先升到 fp32 算归一化，再降回原精度。**「归一化层内部保持 fp32」是所有主流实现的共识做法**，被问到混合精度时这是一个很好的加分点。
-
-> **Pre-Norm 还是 Post-Norm**：看 `MiniMindBlock.forward`：`hidden + self_attn(input_layernorm(hidden))` —— 归一化在**子层之前**，残差是干净的恒等路径，属于 **Pre-Norm**。好处是梯度能沿残差直通、深层也不易发散，代价是最终表示的尺度会随层数累加，所以最后额外加了一个 `self.norm` 收口。
+> **Pre-Norm**：`hidden + self_attn(input_layernorm(hidden))` —— 归一化在**子层之前**，残差是干净的恒等路径。好处是梯度沿残差直通；代价是表示尺度随层数累加，所以最后额外加了 `self.norm` 收口。
 
 ## 2.3 RoPE 旋转位置编码
 
-绝对位置编码（把位置 embedding 加到输入上）有个根本问题：模型学到的是「第 5 个位置」这种绝对概念，换个长度就失效。RoPE 的思路完全不同 —— **不加任何东西，而是把 Q 和 K 向量按位置「转一个角度」。**
+绝对位置编码把位置向量*加*到输入上，模型学到的是「第 5 个位置」这种绝对概念，换个长度就失效。RoPE 的思路完全不同 —— **不加任何东西，而是把 Q 和 K 按位置「转一个角度」。**
 
 ```
-把 head_dim 的 96 维两两配对成 48 个二维平面，第 i 个平面的旋转角为：
+把 head_dim 的 96 维两两配对成 48 个平面，第 i 个平面的旋转角：
 
-    θ_i = pos / base^(2i/d)          base = rope_theta = 1e6
+    θ_i = pos / base^(2i/d)        base = rope_theta = 1e6
 
-对每个平面做二维旋转：
+二维旋转：
     [q'_2i  ]   [cos θ  −sin θ] [q_2i  ]
     [q'_2i+1] = [sin θ   cos θ] [q_2i+1]
 
-关键性质（RoPE 的全部意义所在）：
+关键性质（RoPE 的全部意义）：
     ⟨R(m)·q , R(n)·k⟩ = f(q, k, m − n)
 ```
 
-**直觉类比**：想象每个维度对是一个时钟指针，位置越靠后转得越多。两个 token 做注意力时算的是两根指针的**夹角** —— 而夹角只取决于「差了几个位置」，跟它们各自在第几位无关。**这就是「绝对方式编码、相对方式生效」。**
+**直觉**：每个维度对是一个时钟指针，位置越靠后转得越多。两个 token 做注意力时算的是两根指针的**夹角** —— 而夹角只取决于「差了几个位置」。**绝对方式编码、相对方式生效。**
 
 ```python
-# model/model_minimind.py · precompute_freqs_cis / apply_rotary_pos_emb · L58–86
+# model/model_minimind.py · precompute_freqs_cis · L58–86
 freqs = 1.0 / (rope_base ** (torch.arange(0, dim, 2)[:dim//2].float() / dim))
-freqs = torch.outer(torch.arange(end), freqs).float()                  # [seq, 48]
-freqs_cos = torch.cat([torch.cos(freqs), torch.cos(freqs)], dim=-1)    # [seq, 96]
+freqs_cos = torch.cat([torch.cos(freqs), torch.cos(freqs)], dim=-1)
 
 def rotate_half(x):
     return torch.cat((-x[..., x.shape[-1]//2:], x[..., :x.shape[-1]//2]), dim=-1)
-
-q_embed = (q * cos) + (rotate_half(q) * sin)
 ```
 
-> **为什么是 cat 而不是 interleave**
+> **为什么是 cat 而不是 interleave**：数学上配对的是 `(x₀,x₁), (x₂,x₃)…`，但代码里 `rotate_half` 配的是 `(x₀, x₄₈), (x₁, x₄₉)…` —— **前半段与后半段配对**。两种配法数学等价（只是维度的置换），但**切片比交错快得多**，所以 GPT-NeoX / LLaMA 系全用这种。**换实现时若两边配法不一致，权重就废了。**
+
+> **rope_theta=1e6 与 YaRN**：base 越大，低频分量周期越长。base=1e4 时最低频周期约 6.3 万；1e6 时约 628 万。
 >
-> 数学上配对的是 `(x₀,x₁), (x₂,x₃)…`，但代码里 `rotate_half` 配的是 `(x₀, x₄₈), (x₁, x₄₉)…` —— **前半段与后半段配对**。这就是 `cat([cos, cos])` 而不是 `repeat_interleave` 的原因。两种配法在数学上等价（只是维度的一个置换），但**切片比交错快得多**，所以 GPT-NeoX / LLaMA 系全用这一种。**换实现时若两边配法不一致，权重就废了** —— 这是移植 RoPE 最常见的踩坑点。
+> **YaRN 外推**：按频率分段 —— 高频（管局部）不动；低频（管全局）除以 `factor=16` 压回训练见过的范围；中间用 ramp 过渡。代码就是 `freqs * (1 - ramp + ramp/factor)`，做成**推理期开关**，无需重训。
 
-> **rope_theta = 1e6 的意义**：base 越大，高维（低频）分量的周期越长。base=1e4 时最低频维度的周期约 2π×10⁴ ≈ 6.3 万；base=1e6 时约 628 万。**周期越长，长距离上的位置区分度衰减越慢**，所以想支持长上下文的模型普遍把 base 调大。
-
-### YaRN：训练时短、推理时长
-
-直接把模型用在超过训练长度的输入上，RoPE 会遇到没见过的角度，效果崩塌。YaRN 的做法是**按频率分段处理**：
-
-- **高频维度**（转得快、管局部相对位置）—— 不动，因为局部关系在长文本里没变。
-- **低频维度**（转得慢、管全局位置）—— 除以缩放因子 `factor=16`，等于把位置「压缩」回训练时见过的范围。
-- **中间维度** —— 用 `ramp` 线性过渡，避免突变。
-
-代码里就是 `freqs = freqs * (1 - ramp + ramp / factor)` 这一行，`beta_fast=32 / beta_slow=1` 划定过渡区的两端。**MiniMind 把它做成推理期开关**（`--inference_rope_scaling`），无需重训。
-
-## 2.4 GQA、QK-Norm、KV Cache
+## 2.4 GQA · QK-Norm · KV Cache
 
 | 方案 | Q 头 | KV 头 | KV Cache | 取舍 |
 | --- | ---: | ---: | ---: | --- |
-| **MHA** 多头 | 8 | 8 | 1.00× | 表达力最强，缓存最大 |
-| **GQA** 分组查询 ← MiniMind | 8 | 4 | **0.50×** | 几乎无损，缓存减半 |
-| **MQA** 多查询 | 8 | 1 | 0.125× | 缓存最小，质量损失明显 |
+| **MHA** | 8 | 8 | 1.00× | 表达力最强，缓存最大 |
+| **GQA** ← MiniMind | 8 | 4 | **0.50×** | 几乎无损，缓存减半 |
+| **MQA** | 8 | 1 | 0.125× | 缓存最小，质量损失明显 |
 
-> **为什么减的是 KV 而不是 Q**：因为**推理时被缓存下来的只有 K 和 V**。Q 每步都是新算的、用完就丢，缓存里根本没有它。所以想压缩显存就只能砍 KV 头。**GQA 是「几组 Q 头共用一份 KV」**：MiniMind 里 8 个 Q 头分 4 组，每组 2 个 Q 头共享一份 KV，代码就是 `repeat_kv(xk, n_rep=2)`。
+> **为什么减 KV 不减 Q**：因为**推理时被缓存的只有 K 和 V**。Q 每步新算完就丢，缓存里根本没有它。**GQA = 几组 Q 头共用一份 KV**：8 个 Q 头分 4 组，每组 2 个共享一份，代码就是 `repeat_kv(xk, 2)`。
+>
+> 量化：`KV Cache = 2 × 8层 × 4头 × 96 × 2 B = 12 KB/token`，MHA 则是 24 KB。长上下文时这直接决定并发数。
 
 ```python
-# model/model_minimind.py · class Attention.forward · L109–135
-xq, xk, xv = self.q_proj(x), self.k_proj(x), self.v_proj(x)
-xq = xq.view(bsz, seq_len, 8, 96)     # Q: 8 头
-xk = xk.view(bsz, seq_len, 4, 96)     # K: 4 头
+# model/model_minimind.py · Attention.forward · L109–135
 xq, xk = self.q_norm(xq), self.k_norm(xk)   # QK-Norm，在 RoPE 之前
 xq, xk = apply_rotary_pos_emb(xq, xk, cos, sin)
+if past_key_value is not None:
+    xk = torch.cat([past_key_value[0], xk], dim=1)   # KV Cache
+xk = repeat_kv(xk, self.n_rep)                       # 4 头 → 8 头
 
-if past_key_value is not None:              # KV Cache 拼接
-    xk = torch.cat([past_key_value[0], xk], dim=1)
-    xv = torch.cat([past_key_value[1], xv], dim=1)
-
-xk = repeat_kv(xk, self.n_rep)              # 4 头 → 8 头
-
-if self.flash and (seq_len > 1) and (past_key_value is None) and (mask is None or all(mask==1)):
+if self.flash and (seq_len>1) and (past_key_value is None) and (mask is None or all(mask==1)):
     output = F.scaled_dot_product_attention(xq, xk, xv, is_causal=True)
 else:
     scores = (xq @ xk.transpose(-2,-1)) / math.sqrt(96)   # ← O(S²) 显存
@@ -246,97 +201,124 @@ else:
 
 > **QK-Norm：容易被忽略的现代设计**
 >
-> 在 Q、K 上各挂一个 `RMSNorm(head_dim)`，**放在 RoPE 之前**。作用是把 Q·K 内积的尺度钉住，避免训练中后期注意力 logits 爆大导致 softmax 饱和、进而 loss spike。这是 ViT-22B 与 Chameleon 之后被广泛采用的稳定性技巧。**被问「你怎么防 loss spike」时，这是一个源码里就有的现成答案。**
+> 在 Q、K 上各挂 `RMSNorm(head_dim)`，**放在 RoPE 之前**。作用是把 Q·K 内积的尺度钉住，避免训练中后期注意力 logits 爆大导致 softmax 饱和、进而 loss spike。ViT-22B 与 Chameleon 之后被广泛采用。**被问「怎么防 loss spike」时，这是源码里现成的答案。**
 
-> **⚠ 真实踩坑**
+> **⚠ 真实踩坑：开了 Flash 也会 OOM**
 >
-> 上面那个 `if self.flash and ...` 的条件很苛刻：**只要带了 KV Cache（`past_key_value is not None`），或者 attention_mask 里有 0，就会掉进 `else` 分支的朴素实现**，显存随序列长度**平方**增长。
+> 那个 `if` 条件很苛刻：**只要带 KV Cache，或 attention_mask 里有 0，就掉进 else 分支的朴素实现**，显存随序列长度**平方**增长。
 >
-> 本项目在 Agentic RL 阶段实测：多轮对话累积到 `S=2500`、组大小 4 时，**单层的 scores 矩阵就要 763 MB**（`B×H×S²×4 B`），8 层加反向直接 OOM。降到 `S=1280`、组大小 2 后是 100 MB 才跑得动。**「为什么开了 Flash Attention 还 OOM」—— 答案就在这个 if 条件里。**
-
-### KV Cache：为什么它是推理提速的关键
-
-```
-不带 Cache：生成第 n 个 token 要重算前 n−1 个的 K/V → 总计算量 O(n²)
-带 Cache  ：第 n 步只算新 token 的 K/V，旧的直接取 → 总计算量 O(n)
-
-Cache 显存 = 2 (K和V) × layers × kv_heads × head_dim × seq × dtype
-           = 2 × 8 × 4 × 96 × seq × 2 B  =  12 KB / token
-```
-
-MiniMind 的 KV Cache 用最朴素的 `torch.cat` 实现（`xk = cat([past_k, xk])`），每步都重新分配显存。生产级实现会预分配一整块 buffer 按位写入（PagedAttention 更进一步做分页），但对 64M 模型这点开销可以忽略。**能说出「朴素 cat 会反复分配、生产环境要预分配」，就说明你真读过这段代码。**
+> 本项目 Agentic RL 实测：`S=2500`、组大小 4 时**单层 scores 就要 763 MB**（`B×H×S²×4B`），8 层加反向直接 OOM。降到 `S=1280`、组大小 2 后是 100 MB 才跑得动。
 
 ## 2.5 SwiGLU 前馈网络
 
-```python
-# model/model_minimind.py · class FeedForward · L137–147
-def forward(self, x):
-    return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
-```
-
 ```
 普通 FFN:  down( SiLU( up(x) ) )              2 个矩阵
-SwiGLU  :  down( SiLU( gate(x) ) ⊙ up(x) )    3 个矩阵，⊙ 是逐元素相乘
+SwiGLU  :  down( SiLU( gate(x) ) ⊙ up(x) )    3 个矩阵，⊙ 逐元素相乘
 
-其中 SiLU(x) = x · sigmoid(x)
+SiLU(x) = x · sigmoid(x)
 ```
 
-**直觉类比**：`up(x)` 算出「候选内容」，`gate(x)` 算出「每一维该放行多少」，两者相乘等于给内容装了一道**逐维阀门**。相比固定的激活函数，阀门开度是随输入变化的，表达力更强。
+**直觉**：`up(x)` 算「候选内容」，`gate(x)` 算「每一维放行多少」，相乘等于给内容装了一道**逐维阀门**。相比固定激活函数，阀门开度随输入变化，表达力更强。
 
-代价是参数多了 50%（3 个矩阵而非 2 个），所以主流做法是把中间维压到约 `8/3 × hidden` 来抵消。MiniMind 用 `ceil(768×π/64)×64 = 2432`，约 **3.17 倍**，比 8/3≈2.67 略宽。
+代价是参数多 50%，所以主流把中间维压到约 `8/3 × hidden` 抵消。MiniMind 用 2432，约 **3.17 倍**。
 
 ## 2.6 MoE 与负载均衡
 
 ```python
-# model/model_minimind.py · class MOEFeedForward.forward · L148–175
+# model/model_minimind.py · MOEFeedForward.forward · L148–175
 scores = F.softmax(self.gate(x_flat), dim=-1)              # [N, 4]
-topk_weight, topk_idx = torch.topk(scores, k=1, dim=-1)    # top-1 路由
+topk_weight, topk_idx = torch.topk(scores, k=1, dim=-1)    # top-1
 for i, expert in enumerate(self.experts):
     mask = (topk_idx == i)
     if mask.any():
-        token_idx = mask.any(dim=-1).nonzero().flatten()
         y.index_add_(0, token_idx, expert(x_flat[token_idx]) * weight)
 
-# 负载均衡辅助损失
-load = F.one_hot(topk_idx, num_experts).float().mean(0)    # 各专家实际命中率
+load = F.one_hot(topk_idx, num_experts).float().mean(0)    # 各专家命中率
 self.aux_loss = (load * scores.mean(0)).sum() * num_experts * 5e-4
 ```
 
-> **aux_loss 在防什么**
+> **aux_loss 在防什么**：路由器若发现「把所有 token 都送给专家 2」能让 loss 降得最快，它就会这么干 —— 其余 3 个专家永远拿不到梯度，**MoE 退化成 dense，白占 3 倍显存**。
 >
-> 路由器如果发现「把所有 token 都送给专家 2」能让 loss 下降得最快，它就会这么干 —— 结果其余 3 个专家永远拿不到梯度，**MoE 退化成一个 dense 模型，白白多占 3 倍显存**。
->
-> `aux_loss = Σ(实际命中率 × 平均路由概率)`，当分布完全均匀时取最小值。它**同时惩罚「命中多」和「打分高」**，因此路由器无法靠只提高分数而不实际路由来钻空子。
+> `aux_loss = Σ(实际命中率 × 平均路由概率)`，分布均匀时取最小。它**同时惩罚「命中多」和「打分高」**，所以路由器没法靠只提高分数而不实际路由来钻空子。
 
-> **怎么证明专家没坍缩（硬证据）**
+> **怎么证明没坍缩（硬证据）**：只看 aux_loss 稳定是**间接**证据。直接做法：在 `gate` 上挂前向钩子取出路由 logits，复原 top-k 分配并逐层统计。
 >
-> 只看 aux_loss 稳定是**间接**证据 —— 它是个标量，稳定只说明损失没恶化。直接做法是在 `self.gate` 上挂前向钩子取出路由 logits，复原 top-k 分配并逐层统计。
->
-> 本项目实测（留出集 320 条 × 340 token）：4 个专家占比 **25.9% / 25.0% / 24.9% / 24.3%**，归一化熵 **1.000**，8 层全部均匀，零个未使用专家。**面试时给出这组数字，比说「aux_loss 很稳」强一个量级。**（脚本见 `evals/expert_routing.py`）
+> 本项目实测（320 条 × 340 token）：4 个专家占比 **25.9 / 25.0 / 24.9 / 24.3%**，归一化熵 **1.000**，8 层全均匀，零个未使用专家。脚本见 `evals/expert_routing.py`。
 
 ## 2.7 权重绑定 tie_word_embeddings
 
-```python
-# model/model_minimind.py · MiniMindForCausalLM.__init__ · L237–241
-_tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
-...
-if self.config.tie_word_embeddings:
-    self.model.embed_tokens.weight = self.lm_head.weight
-```
-
-> **省了多少，为什么合理**
+> 省下 **4,915,200 个参数**，占 63.91M 的 **7.7%**。
 >
-> 省下 **4,915,200 个参数**，占 63.91M 的 **7.7%** —— 对小模型是可观的比例。
+> 合理性在于两者语义对偶：嵌入矩阵第 *i* 行是「token *i* 的向量表示」，输出投影第 *i* 列是「当前状态有多像 token *i*」—— **本来就该是同一组向量**。
 >
-> 合理性在于两者语义对偶：嵌入矩阵的第 *i* 行是「token *i* 的向量表示」，输出投影的第 *i* 列是「判断当前状态有多像 token *i*」。**本来就该是同一组向量。**
->
-> **副作用**：绑定后梯度从两条路汇到同一张表上，等效学习率变高，有时需要略调 lr。另外统计参数量时**只能算一次**，算两次就会得到错误的 68.8M。
+> **副作用**：梯度从两条路汇到同一张表，等效学习率变高；统计参数量时**只能算一次**，算两次会得到错误的 68.8M。
 
 ---
 
-# 第三章 · 训练与优化机制
+# 第三章 · 预训练与 SFT
 
-## 3.1 自回归 Loss 与因果掩码
+## 3.1 语言模型到底在优化什么
+
+这是全部训练的地基。一句话：**语言模型学的是「一段文字出现的概率」，而它把这个概率拆成了一连串「下一个词是什么」的乘积。**
+
+**第 1 步 · 目标：给一整句话打一个概率**
+
+```
+P("今天天气很好") = ?
+```
+
+直接建模整句话的概率不可行 —— 可能的句子有无穷多种，没法列表。
+
+**第 2 步 · 用链式法则拆开（恒等变形，没有任何近似）**
+
+```
+P(x₁…x_T) = P(x₁) · P(x₂|x₁) · P(x₃|x₁x₂) · … = ∏_{t=1..T} P(x_t | x_<t)
+```
+
+于是「给整句打分」变成了「反复回答：看了前面这些字，下一个字是什么」。**这就是自回归。** 模型每个位置输出 6400 维 logits，softmax 后就是 `P(x_t | x_<t)`。
+
+**第 3 步 · 最大似然：让训练语料的概率最大**
+
+```
+max_θ ∏_t P_θ(x_t | x_<t)
+```
+
+连乘会下溢（几百个小于 1 的数相乘），所以取对数变成连加。
+
+**第 4 步 · 取对数、加负号 → 变成最小化**
+
+```
+L(θ) = − (1/T) Σ_t log P_θ(x_t | x_<t)
+```
+
+这就是**负对数似然 NLL**。而它**恰好等于**交叉熵 —— 因为真实分布是 one-hot（真值那个词概率为 1、其余为 0），交叉熵 `−Σ q log p` 里只有真值那一项非零。
+
+> **所以 `F.cross_entropy` 不是「随便选的损失」，它就是最大似然本身。**
+>
+> 一句话记住：**交叉熵 = 负对数似然 = 「模型对真值词给的概率有多低」的惩罚。**
+
+## 3.2 交叉熵、困惑度与那个 8.76
+
+```
+loss = −log P(真值词)      单个位置
+PPL  = exp(loss)           困惑度
+```
+
+**困惑度的直觉**：PPL = 「模型在多少个候选词之间犹豫」。PPL = 1 → 完全确定；PPL = 100 → 相当于在 100 个词里瞎猜；PPL = 6400 → 在整个词表里均匀瞎猜。
+
+**为什么随机初始化时 loss ≈ 8.76**
+
+```
+随机权重 → 输出近似均匀分布 → P(任一词) ≈ 1/6400
+loss = −log(1/6400) = log(6400) = 8.7639
+PPL  = exp(8.7639) = 6400  ✓
+```
+
+> **这是排查训练脚本最快的第一个检查点。** 开局 loss 远大于 8.76 → 初始化或 label 有问题；**远小于 → 标签泄漏**（最常见是忘了 shift，模型在预测自己）。
+
+> **⚠ 跨模型比 PPL 的陷阱**：PPL 是**按 token** 统计的。词表小 → 同样文本被切成更多 token → 每个 token 更好猜 → PPL 天然更低。**所以跨 tokenizer 比 PPL 完全没有意义。** 那种情况要用 **BPB（Bits Per Byte）**：把损失换算到「每字节多少比特」，与词表无关。
+
+## 3.3 Teacher Forcing 与那个错位一格
 
 ```python
 # model/model_minimind.py · MiniMindForCausalLM.forward · L249–253
@@ -347,29 +329,42 @@ if labels is not None:
 
 ```
 输入:  [BOS]  今天   天气   很好   [EOS]
-logits: p₀     p₁     p₂     p₃     p₄        ← 掐掉最后一个 p₄
-labels: [BOS]  今天   天气   很好   [EOS]      ← 掐掉第一个 [BOS]
+       ↓      ↓      ↓      ↓      ↓
+logits: p₀     p₁     p₂     p₃     p₄     ← 掐掉最后一个 p₄（它要预测的词不存在）
+labels: [BOS]  今天   天气   很好   [EOS]   ← 掐掉第一个 [BOS]（没有词预测它）
 
-配对:  p₀→"今天"  p₁→"天气"  p₂→"很好"  p₃→"[EOS]"
+配对:  p₀→"今天"   p₁→"天气"   p₂→"很好"   p₃→"[EOS]"
 ```
 
-**为什么要错一位**：第 t 个位置的输出预测的是第 t+1 个 token。不做这个 shift，模型就会被训练成「预测自己」—— 而它本来就能看到自己，loss 会瞬间趋零，模型什么也学不到。**这是新手写训练循环最经典的 bug。**
+**为什么要错一位**：第 t 个位置的输出预测的是第 t+1 个 token。不做 shift，模型就会被训练成「预测自己」—— 而它本来就能看到自己，loss 瞬间趋零。**这是新手写训练循环最经典的 bug。**
 
-> **因果掩码在哪**：掩码**不在 loss 里，在注意力里**。`F.scaled_dot_product_attention(..., is_causal=True)` 或朴素路径的 `scores += triu(-inf, 1)` 保证位置 t 只能看到 ≤ t。
+> **Teacher Forcing 是什么**
 >
-> 两者分工：**因果掩码防「偷看未来」，shift 保证「预测的是下一个」**。缺任何一个模型都学不成语言模型。
+> 训练时，**不管模型第 t 步预测成什么，第 t+1 步喂进去的都是真实的第 t 个词**。这样 T 个位置可以**并行**算完（一次前向），而不用像推理那样串行 T 次。
+>
+> **代价是 exposure bias**：训练时模型看到的永远是完美的前文，推理时看到的是自己生成的（可能有错的）前文。一旦第一步错了，后面就在没见过的分布上走。**这也是 RL 和 on-policy 蒸馏存在的根本理由 —— 让模型在自己会走到的状态上学习。**
 
-## 3.2 Pretrain 与 SFT 的唯一本质差别
+> **因果掩码在哪**：掩码**不在 loss 里，在注意力里**。两者分工：**因果掩码防「偷看未来」，shift 保证「预测的是下一个」**。缺任何一个都学不成语言模型。
 
-两个阶段用**完全相同的模型、完全相同的交叉熵**。差别只有一处：**labels 里哪些位置被设成 `-100`。**
+## 3.4 SFT：唯一的改动是标签
+
+Pretrain 与 SFT 用**完全相同的模型、完全相同的交叉熵**。差别只有一处：**labels 里哪些位置被设成 −100。**
+
+```
+Pretrain:  L = − (1/N) Σ_{所有 token} log P(x_t | x_<t)
+
+SFT:       L = − (1/|A|) Σ_{t ∈ A} log P(x_t | x_<t)      A = assistant 段的位置集合
+```
+
+注意 **条件部分 `x_<t` 没变** —— prompt 依然完整地参与前向、依然被注意力看到，只是**不产生梯度**。模型学的是「给定这个 prompt，该回什么」，而不是「怎么把 prompt 本身写出来」。
 
 | | PretrainDataset | SFTDataset |
 | --- | --- | --- |
 | 输入构造 | `[BOS] + text + [EOS] + pad` | `apply_chat_template(对话)` |
-| labels | `input_ids.clone()` | 全 `-100`，再挖出 assistant 段 |
-| `-100` 的位置 | 仅 padding | **padding + system + user + 所有格式 token** |
-| 计 loss 的比例 | ≈ 100% | ≈ 30–50% |
-| 学到什么 | 语言分布本身 | 「在这种上下文里该怎么回答」 |
+| labels | `input_ids.clone()` | 全 −100，再挖出 assistant 段 |
+| −100 的位置 | 仅 padding | **padding + system + user + 所有格式 token** |
+| 计 loss 比例 | ≈ 100% | ≈ 30–50% |
+| 学到什么 | 语言分布本身 | 「这种上下文里该怎么回答」 |
 
 ```python
 # dataset/lm_dataset.py · SFTDataset.generate_labels · L91–105
@@ -378,7 +373,7 @@ self.eos_id = tokenizer(f'{eos_token}\n').input_ids
 
 labels = [-100] * len(input_ids)             # ① 先全部屏蔽
 while i < len(input_ids):
-    if input_ids[i:i+len(bos_id)] == bos_id:  # ② 扫描到 assistant 开头
+    if input_ids[i:i+len(bos_id)] == bos_id:  # ② 扫到 assistant 开头
         start = i + len(bos_id)
         while end < len(input_ids) and input_ids[end:end+len(eos_id)] != eos_id:
             end += 1
@@ -386,80 +381,538 @@ while i < len(input_ids):
             labels[j] = input_ids[j]          # ③ 只把回答段填回去
 ```
 
-> **高频面试题的标准答案：「SFT 时如何只对 Answer 计算 loss？」**
->
-> 把 labels 初始化为全 `-100`，用 **token id 序列匹配**（不是字符串匹配）定位每一段 `<|im_start|>assistant\n` 到 `<|im_end|>` 之间的区间，只把这些区间的 label 填回真实 token id。`F.cross_entropy(ignore_index=-100)` 会自动跳过其余位置。
->
-> **三个加分细节**：
-> 1. 多轮对话有多个 assistant 段，要循环扫描**全部**而不是只找第一个；
-> 2. `<|im_end|>` 本身要**计入** loss，否则模型学不会停下来；
-> 3. 匹配必须在 token id 层面做，因为同样的文字在不同上下文可能切成不同的 token。
+> **三个能拉开差距的细节**
+> 1. 多轮对话有**多个** assistant 段，必须循环扫完，只处理第一段是常见 bug；
+> 2. `<|im_end|>` 本身**要计入** loss，否则模型学不会停下来；
+> 3. 匹配必须在 **token id 层面**而非字符串层面 —— 同样的文字在不同上下文可能切成不同的 token。
 
-> **⚠ 本仓库的一个真实陷阱**
+> **⚠ 本仓库的真实陷阱**：`pre_processing_chat` 与 `post_processing_chat` 内部调用了 `random`：以一定概率随机加 system prompt、以 80% 概率随机删空 think 标签。
 >
-> `pre_processing_chat` 与 `post_processing_chat` 内部调用了 `random`：以一定概率随机添加 system prompt、以 80% 概率随机移除空的 think 标签。
->
-> 后果是**同一条样本每次取出来都可能不同**。本项目做多模型对比时，一开始给每个模型各迭代一次 DataLoader，结果各模型吃到的是**不同版本的数据**，配对检验的前提被破坏。修法是把 batch 固化成一份张量再喂给所有模型。**做任何「同数据对比」之前，务必确认 Dataset 是确定性的。**
+> 后果是**同一条样本每次取出来都可能不同**。本项目做多模型对比时给每个模型各迭代一次 DataLoader，结果各模型吃到**不同版本的数据**，配对检验的前提被破坏。修法是把 batch 固化成张量再喂给所有模型。**做任何「同数据对比」前，务必确认 Dataset 是确定性的。**
 
-## 3.3 学习率调度
+## 3.5 学习率调度
 
 ```python
 # trainer/trainer_utils.py · get_lr · L40–41
-def get_lr(current_step, total_steps, lr):
-    return lr * (0.1 + 0.45 * (1 + math.cos(math.pi * current_step / total_steps)))
+return lr * (0.1 + 0.45 * (1 + math.cos(math.pi * current_step / total_steps)))
 ```
 
 ```
-step = 0        → lr × (0.1 + 0.45×2) = lr × 1.00
-step = 总步数/2  → lr × (0.1 + 0.45×1) = lr × 0.55
-step = 总步数    → lr × (0.1 + 0.45×0) = lr × 0.10
+step = 0    → lr × (0.1 + 0.45×2) = lr × 1.00
+step = 一半  → lr × (0.1 + 0.45×1) = lr × 0.55
+step = 结束  → lr × (0.1 + 0.45×0) = lr × 0.10
 ```
 
-这是一条**从 1.0 余弦衰减到 0.1 的曲线，不是衰减到 0**，而且**没有 warmup**。留 10% 的底是为了让模型在训练末期仍有微调能力；没有 warmup 则是因为模型只有 8 层、又有 QK-Norm 和 Pre-Norm 兜底，初期不易发散。
+这是一条**从 1.0 余弦衰减到 0.1 的曲线，不是到 0**，而且**没有 warmup**。留 10% 的底让模型末期仍有微调能力；没有 warmup 是因为只有 8 层、又有 QK-Norm 与 Pre-Norm 兜底。**照搬「cosine to zero + linear warmup」的回答说明没读代码。**
 
-**被问到时要说清这两点与教科书写法的差异** —— 照搬「cosine to zero + linear warmup」的回答说明没读代码。
-
-## 3.4 混合精度 · 梯度累积 · 梯度裁剪
+## 3.6 混合精度 · 梯度累积 · 梯度裁剪
 
 ```python
 # trainer/train_full_sft.py · train_epoch · L14–38
-with autocast_ctx:                          # bf16 自动混合精度
-    res = model(input_ids, labels=labels)
-    loss = res.loss + res.aux_loss
-    loss = loss / args.accumulation_steps   # ① 先除，梯度才是平均值
-
-scaler.scale(loss).backward()               # ② 放大 loss 防 fp16 下溢
-
+with autocast_ctx:
+    loss = (res.loss + res.aux_loss) / args.accumulation_steps   # ① 先除
+scaler.scale(loss).backward()                                    # ② 放大防下溢
 if step % args.accumulation_steps == 0:
-    scaler.unscale_(optimizer)              # ③ 裁剪前必须先还原
+    scaler.unscale_(optimizer)                                   # ③ 裁剪前先还原
     torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
     scaler.step(optimizer); scaler.update()
     optimizer.zero_grad(set_to_none=True)
 ```
 
 > **三个顺序不能错的点**
+> 1. **`loss / accum` 必须在 backward 之前** —— 梯度是累加的，不除等于把学习率放大 N 倍。
+> 2. **`unscale_` 必须在 `clip_grad_norm_` 之前** —— 否则裁剪的是被放大过的梯度，阈值完全失去意义。**这是混合精度 + 裁剪最经典的错误。**
+> 3. **`zero_grad(set_to_none=True)`** 比置零省一次显存写。
+
+> **等效批量**：`有效 batch = batch_size × accumulation_steps × GPU 数`。本项目 MoE 预训练 `16×16=256`，SFT `6×3=18`。**梯度累积用时间换显存，数学上等价于大 batch**（Transformer 用 LayerNorm/RMSNorm 逐样本归一化，所以完全等价；BatchNorm 才会不等价）。
+
+---
+
+# 第四章 · LoRA 参数高效微调
+
+## 4.1 低秩假设从哪来
+
+全量微调要更新全部 63.91M 参数，优化器状态还要再占两倍。LoRA 的出发点是一个观察：**把一个预训练模型适配到某个下游任务，所需的权重改动 ΔW 往往「秩很低」** —— ΔW 虽然是 768×768 的大矩阵，但它的信息量远没有 768×768 那么多。
+
+```
+全量微调:  W' = W + ΔW      ΔW 自由，秩最高 768，要存 589,824 个数
+LoRA    :  W' = W + B·A     强制 rank(BA) ≤ r，只存 2×768×r 个数
+
+           A ∈ ℝ^(r×d)   B ∈ ℝ^(d×r)   r ≪ d
+           d=768, r=16 → 589,824 → 24,576（4.2%）
+```
+
+**直觉类比**：全量微调是「把整张 768×768 的表全改一遍」；LoRA 是「不动原表，另外记一张**薄薄的修正表**」，而这张修正表被强制写成两个瘦矩阵的乘积 —— 就像把一张大图压缩成「16 个基础图案 + 每个图案的权重」。
+
+## 4.2 前向与反向，梯度到底流去哪
+
+**第 1 步 · 前向：两条路相加**
+
+```
+h = W·x + B·(A·x)
+    ↑冻结    ↑可训练
+```
+
+原始线性层照常算，LoRA 分支单独算一遍再加上去。代码里是猴子补丁 `forward = lambda x: original(x) + lora(x)`。
+
+**第 2 步 · 反向：W 的梯度被丢弃，只有 A、B 更新**
+
+```
+∂L/∂B = (∂L/∂h) · (A·x)ᵀ
+∂L/∂A = Bᵀ · (∂L/∂h) · xᵀ
+∂L/∂W = 照算但不用（W.requires_grad = False）
+```
+
+> **注意反向传播依然要穿过整个网络** —— 上游的梯度必须一层层传下来才能算出 `∂L/∂h`。**所以 LoRA 省的是「优化器状态 + 梯度存储」，不是「反向传播的计算量」。** 这是个常见误解。
+
+**第 3 步 · 初始化：B = 0 是关键设计**
+
+```
+A ~ N(0, 0.02²)     B = 0
+→ 训练起点 ΔW = B·A = 0，模型行为与原模型完全一致
+```
+
+**为什么不能都随机**：那样起点就带了一个随机扰动，等于给一个训练好的模型加噪声。**为什么不能都置零**：`∂L/∂A = Bᵀ(...) = 0`，梯度恒为零，永远学不动。**所以必须一个随机、一个置零，而置零的要是输出侧的 B。**
+
+```python
+# model/model_lora.py · class LoRA + apply_lora · L5–34
+class LoRA(nn.Module):
+    def __init__(self, in_features, out_features, rank):
+        self.A = nn.Linear(in_features, rank, bias=False)
+        self.B = nn.Linear(rank, out_features, bias=False)
+        self.A.weight.data.normal_(mean=0.0, std=0.02)   # 高斯
+        self.B.weight.data.zero_()                       # 全零
+
+    def forward(self, x):
+        return self.B(self.A(x))     # ← 注意：没有 alpha/r 缩放
+
+for name, module in model.named_modules():
+    if isinstance(module, nn.Linear) and module.in_features == module.out_features:
+        ...
+        module.forward = lambda x: original_forward(x) + lora(x)
+```
+
+## 4.3 显存账：省的到底是什么
+
+| 项目 | 全量微调 | LoRA (r=16) | 说明 |
+| --- | ---: | ---: | --- |
+| 模型权重 | 63.91M × 2B | 63.91M × 2B | 一样，都要放 |
+| **可训练参数** | 63.91M | **0.39M** | **0.62%** |
+| **梯度** | 63.91M × 4B | **0.39M × 4B** | 只有可训练参数需要存梯度 |
+| **AdamW 状态** | 63.91M × 8B | **0.39M × 8B** | 一阶+二阶动量，各 fp32 |
+| 激活值 | 大 | 同样大 | **不省** —— 反向仍要穿过全网络 |
+
+> **最大的一块是优化器状态**：AdamW 每个可训练参数要额外存**两个 fp32**（一阶动量 m、二阶动量 v），是 bf16 权重的 **4 倍**。全量微调时 `63.91M × 8B = 511 MB`，LoRA 只要 `0.39M × 8B = 3.1 MB`。
 >
-> 1. **`loss / accumulation_steps` 必须在 backward 之前** —— 梯度是累加的，不除就等于把学习率放大了 N 倍。
-> 2. **`unscale_` 必须在 `clip_grad_norm_` 之前** —— 否则裁剪的是被放大过的梯度，阈值完全失去意义。这是混合精度 + 裁剪组合最经典的错误。
-> 3. **`zero_grad(set_to_none=True)`** 比置零省一次显存写，且能让未使用参数的梯度真正为 `None`。
+> **所以 LoRA 的省显存主要来自「梯度 + 优化器状态」，激活值一分不省。** 要省激活值得用梯度检查点。
 
-> **等效批量**：`有效 batch = batch_size × accumulation_steps × GPU 数`。本项目 MoE 预训练用 `16 × 16 = 256`，SFT 用 `6 × 3 = 18`。**梯度累积用时间换显存，数学上等价于大 batch，但 BatchNorm 类算子除外**（Transformer 用的是 LayerNorm/RMSNorm，逐样本归一化，所以完全等价）。
+## 4.4 本仓库的两处偏离 —— 极佳的面试谈资
 
-## 3.5 DPO 直接偏好优化
+### 偏离一：只给方阵挂 LoRA
 
-RLHF 的经典三段式是：训奖励模型 → 用 PPO 采样优化 → 反复调。DPO 的洞察是：**如果奖励模型采用 Bradley-Terry 形式，那么最优策略与奖励之间存在闭式关系，可以把奖励模型完全消掉**，直接在偏好数据上做监督式优化。
+| 模块 | 形状 | 是方阵？ | 挂得上？ |
+| --- | ---: | :---: | --- |
+| `q_proj` | 768 → 768 | ✓ | ✅ 挂上 |
+| `o_proj` | 768 → 768 | ✓ | ✅ 挂上 |
+| `k_proj` / `v_proj` | 768 → **384** | ✗ | ❌ GQA 导致 |
+| `gate_proj` / `up_proj` | 768 → **2432** | ✗ | ❌ |
+| `down_proj` | 2432 → 768 | ✗ | ❌ |
 
 ```
-L_DPO = −log σ( β · [ (log π_θ(y_w|x) − log π_ref(y_w|x))
-                     − (log π_θ(y_l|x) − log π_ref(y_l|x)) ] )
-
-  y_w = chosen（更好的回答）   y_l = rejected（更差的回答）
-  π_θ = 正在训练的策略        π_ref = 冻结的 SFT 模型
+实际挂上的模块 = 每层 2 个 × 8 层 = 16 个
+参数量 = 16 × (768×16 + 16×768) = 393,216 ≈ 0.39M
+占比   = 0.39M / 63.91M = 0.62%   ← 与训练日志完全吻合
 ```
 
-**直觉类比**：括号里是「策略相对参考模型，在好回答上提升了多少」减去「在坏回答上提升了多少」。我们希望前者大于后者 —— 也就是**把概率质量从坏回答搬到好回答上**。σ 与 −log 把它变成一个可导的分类损失。
+> **这是无心还是有意？** LoRA 原论文的主要消融结论正是「只改 W_q 和 W_v 效果就很好」。但这里因为 GQA 让 `v_proj` 变成了 768×384 的非方阵而被漏掉，实际改的是 **W_q 和 W_o**。**严格说与论文推荐并不一致** —— 能指出这一点，说明你读代码到了实处。
 
-**减去 π_ref 是关键**：只看 π_θ 的话，模型可以把两个回答的概率**一起**压低来降低 loss（灾难性遗忘）；减去参考项后只有**相对**变化才算数。
+### 偏离二：没有 alpha 缩放
+
+```
+标准 LoRA:   ΔW = (α / r) · B·A     α 是超参，通常取 16 或 32
+本仓库    :   ΔW = B·A              相当于 α = r，缩放恒为 1
+```
+
+> **α/r 是干什么的**：让**换 rank 时不必重调学习率**。r 变大时 B·A 的元素个数变多、乘积的典型幅度也变大，除以 r 正好抵消掉这个增长。
+>
+> **没有它的后果**：把 r 从 8 改到 64，等效更新幅度会跟着变化，**学习率必须重新调**。对固定 r 的单次实验没有影响，但做 rank 消融时会得到被混淆的结论。
+
+## 4.5 合并回基模与 QLoRA
+
+```python
+# model/model_lora.py · merge_lora · L57–65
+state_dict[f'{name}.weight'] += (module.lora.B.weight.data @ module.lora.A.weight.data).half()
+```
+
+> **合并的意义**：把 `B·A` 这个 768×768 的矩阵直接加回 W，得到一个**普通的模型**。合并后**推理零额外开销** —— 不再有第二条分支要算。这是 LoRA 相比 Adapter 类方法的最大优势（Adapter 插了额外的层，永远也去不掉）。
+>
+> 代价是合并后就**不能再切换适配器**了。要同时服务多个任务就得保持不合并、动态加载。
+
+> **QLoRA = 4-bit 基座 + fp16 适配器**：基座冻结所以可以激进量化 —— **NF4**（专为正态分布权重设计的 4-bit 数据类型）+ **双重量化**（连量化常数本身也量化）。只有 LoRA 分支保持高精度参与梯度。再配 **paged optimizer** 把优化器状态换出到内存。三者合起来能在单张 24GB 卡上微调 65B 模型。
+>
+> **MiniMind 本身没实现 QLoRA**（64M 没必要），但这是必答题。
+
+---
+
+# 第五章 · 偏好对齐与强化学习
+
+> 这一章从最基本的策略梯度开始，一步步推到 PPO、GRPO、CISPO、DPO。**每个公式都对应本仓库的实际代码**，不是通用教材版本 —— 几处关键实现与教材写法有偏差，会逐一指出。
+
+## 5.1 为什么 SFT 之后还需要 RL
+
+```
+SFT 能表达的:   「这个回答是对的」        正例，绝对
+SFT 表达不了:   「A 比 B 好」              相对
+             「不要这样答」              负例
+             「这个答案有 0.7 分」        连续评分
+```
+
+交叉熵的形式决定了它只能**拉高某个特定序列的概率**。它没有任何位置可以放「这个序列有多好」这个标量。**而 RL 的整个框架就是围绕「用一个标量奖励去调整概率分布」建起来的。**
+
+> **还有一个更微妙的理由**：SFT 是 **off-policy** 的 —— 它让模型模仿别人写的答案，而模型自己生成时会走到**训练里从没见过的状态**（exposure bias，见 §3.3）。
+>
+> RL 是 **on-policy** 的：**模型自己采样、在自己会走到的状态上被评价和修正**。这是它能解决 SFT 解决不了的问题的根本原因。
+
+## 5.2 策略梯度定理与 REINFORCE
+
+先建立最基本的框架。**把「生成一段回答」看成一局游戏**：模型是策略 π_θ，每一步选一个 token（动作），生成完整回答后拿到一个分数 R。目标是让期望分数最大。
+
+**第 1 步 · 目标函数**
+
+```
+J(θ) = E_{y ~ π_θ(·|x)} [ R(x, y) ]
+```
+
+「按我的策略采样出一个回答，期望能拿多少分」。我们要**最大化**它。
+
+**第 2 步 · 难点：期望里的分布本身依赖 θ**
+
+```
+∇_θ J = ∇_θ Σ_y π_θ(y) R(y)
+```
+
+R 是个黑盒（可能是人打分、可能是奖励模型），对 θ 不可导。而 π_θ 在求和号里面。
+
+**第 3 步 · 对数导数技巧（log-derivative trick）**
+
+```
+∇π = π · ∇log π        因为 ∇log π = ∇π / π
+```
+
+这一步是整个策略梯度的枢纽 —— 它把「对分布求导」变回了「在分布下求期望」。
+
+**第 4 步 · 策略梯度定理**
+
+```
+∇_θ J = E_{y ~ π_θ} [ R(y) · ∇_θ log π_θ(y) ]
+```
+
+**现在可以用采样来估计了**：采 N 个回答，算平均。
+
+**直觉**：拿到高分的回答，就提高它的对数概率（梯度上升）；低分的就压低。**R 就是每个样本梯度的权重。**
+
+**第 5 步 · 拆到 token 级**
+
+```
+∇_θ J ≈ (1/N) Σ_i R(y⁽ⁱ⁾) · Σ_t ∇_θ log π_θ(y⁽ⁱ⁾_t | x, y⁽ⁱ⁾_<t)
+```
+
+这就是 **REINFORCE**。写成损失就是 `loss = -(R * logp).mean()`。
+
+> **⚠ REINFORCE 的致命问题：方差极大。**
+>
+> 假设所有回答的分数都在 5 到 7 之间 —— 它们全是正的，于是**所有**回答的概率都被推高，只是幅度不同。真正有用的信号（「7 分比 5 分好」）被淹没在「大家都是正分」这个共同的偏移里。
+>
+> 采样噪声还会让同一个回答这次采到、下次采不到，梯度方向剧烈摆动。**这直接引出下一节的基线。**
+
+## 5.3 基线与优势函数
+
+**第 1 步 · 减去一个不依赖动作的基线 b，期望不变**
+
+```
+E[ (R − b) · ∇log π ] = E[ R·∇log π ] − b·E[ ∇log π ]
+                                          ↑ 这一项恒等于 0
+```
+
+因为 `E[∇log π] = Σ π · ∇log π = Σ ∇π = ∇(Σπ) = ∇1 = 0`。
+
+**所以减基线不引入偏差，但能大幅降低方差** —— 这是「免费的午餐」。
+
+**第 2 步 · 优势函数：把「绝对分」变成「相对分」**
+
+```
+A(x, y) = R(x, y) − b(x)
+```
+
+**直觉**：不问「这个回答好不好」，而问「**这个回答比平均水平好多少**」。比平均好 → A > 0 → 提高概率；比平均差 → A < 0 → 压低概率。**现在有了真正的负信号。**
+
+**第 3 步 · 基线怎么来？—— 这是各算法分道扬镳的地方**
+
+```
+PPO  ：训一个 Critic 网络 V(s) 来预测「这个状态的期望回报」
+GRPO ：同一 prompt 采 G 个回答，用这一组的均值当基线
+DPO  ：干脆不采样，用成对数据直接算相对偏好
+```
+
+## 5.4 重要性采样：为什么能用旧数据更新
+
+策略梯度要求样本来自**当前**策略 π_θ。但采样很贵（要自回归生成几百个 token），只更新一次就扔掉太浪费。**能不能用同一批样本更新好几次？**
+
+```
+E_{y ~ π_new} [ f(y) ] = E_{y ~ π_old} [ (π_new(y) / π_old(y)) · f(y) ]
+                                          ↑ 重要性权重 ratio
+```
+
+**直觉类比**：你想知道「北京人的平均身高」，手上却只有上海人的数据。重要性采样说：可以用上海数据算，但每个样本要**加权** —— 在北京更常见的那类人，权重调高。
+
+代入 RL：用旧策略采的样本，乘上 `π_new/π_old` 这个比值来修正，就能估计新策略的梯度。
+
+```python
+# trainer/train_grpo.py
+ratio = torch.exp(per_token_logps - old_per_token_logps)
+# exp(log a − log b) = a / b，在对数空间做除法更稳定
+```
+
+> **⚠ 重要性采样的危险**：如果 π_new 和 π_old 差太远，ratio 会变得极大或极小 —— **方差爆炸，估计完全失效**。
+>
+> 比如某个 token 在旧策略下概率 0.001、新策略下 0.5，ratio = 500，这一个样本就会主导整个梯度。**这就是 PPO 要「裁剪」的直接原因。**
+
+## 5.5 PPO 的裁剪：为什么是 min 而不是 clip
+
+```
+L^CLIP = E[ min( ratio · A , clip(ratio, 1−ε, 1+ε) · A ) ]
+
+  ratio = π_θ(a|s) / π_θ_old(a|s)      ε = clip_epsilon = 0.2
+```
+
+很多人以为「裁剪」就是把 ratio 限制在 [0.8, 1.2]。**不是** —— 如果只做 clip，当 ratio 已经超出范围时梯度就恒为 0，模型再也回不来了。**外面套一层 min 才是关键。**
+
+| 情况 | A 的符号 | ratio | min 选中哪个 | 效果 |
+| --- | :---: | :---: | --- | --- |
+| 好动作，已提升很多 | A > 0 | > 1+ε | clip 项（较小） | **梯度截断**，不再继续推高 |
+| 好动作，提升不多 | A > 0 | ≈ 1 | ratio 项 | 正常更新 |
+| 坏动作，已压低很多 | A < 0 | < 1−ε | clip 项（更负→较小） | **梯度截断** |
+| **坏动作，反而被推高了** | A < 0 | > 1+ε | ratio 项（更负） | **不截断！**让它被拉回来 |
+
+> **最后一行是 min 的全部意义**：当策略「跑错方向跑太远」时（坏动作的概率反而涨了），**我们希望梯度继续起作用把它拉回来**，而不是因为超出裁剪区间就放弃。`min` 恰好保证了这一点。
+>
+> **一句话：裁剪只在「已经朝对的方向走够了」时刹车，绝不在「走错方向」时刹车。**
+
+```python
+# trainer/train_ppo.py · L209–211（用 max 等价实现）
+policy_loss = torch.max(-advantages[inds] * ratio,
+                        -advantages[inds] * torch.clamp(ratio, 1.0-ε, 1.0+ε))
+# 注意：max(-a, -b) == -min(a, b)，加了负号所以 min 变 max，等价
+```
+
+## 5.6 GAE：优势怎么逐 token 算出来
+
+上面说的 A 是「整个回答」的优势。但生成是逐 token 的，**我们需要知道每一个 token 的贡献**。GAE（Generalized Advantage Estimation）就是干这个的。
+
+**第 1 步 · TD 误差：单步的「惊喜程度」**
+
+```
+δ_t = r_t + γ·V(s_{t+1}) − V(s_t)
+```
+
+**直觉**：「我原本以为这局能拿 V(s_t) 分；走了一步后，实际拿到 r_t、并且新局面值 V(s_{t+1}) 分。」**δ 就是这次比预期好了多少。**
+
+**第 2 步 · GAE：把未来所有的惊喜按 γλ 衰减加起来**
+
+```
+A_t = δ_t + γλ·δ_{t+1} + (γλ)²·δ_{t+2} + …
+    = δ_t + γλ·A_{t+1}          ← 倒着递推，一遍算完
+```
+
+**λ 控制偏差-方差权衡**：λ=0 时只看一步（偏差大、方差小）；λ=1 时看完整轨迹（无偏、方差大）。本仓库 `lam=0.95`、`gamma=1.0`。
+
+**第 3 步 · 本仓库的奖励是「稀疏终局奖励」**
+
+```
+token_rewards = 全 0
+token_rewards[最后一个 token] += 外部奖励
+```
+
+中间每个 token 都**没有**即时奖励，整段回答的分数全部记在最后一个 token 上。**GAE 的作用就是把这个终局分数合理地分摊回前面每一个 token** —— 这正是它存在的意义。
+
+```python
+# trainer/train_ppo.py · GAE 倒推 · L139–150
+lastgaelam = torch.zeros(B)
+for t in reversed(range(gen_len)):
+    nv = old_resp_values[:, t+1] if t < gen_len-1 else 0.0
+    delta = token_rewards[:, t] + args.gamma * nv - old_resp_values[:, t]
+    lastgaelam = delta + args.gamma * args.lam * lastgaelam    # 递推
+    advs_rev.append(lastgaelam)
+advantages = torch.stack(advs_rev[::-1], dim=1)
+returns = advantages + old_resp_values          # Critic 的回归目标
+
+# 优势归一化：减均值除标准差（只在有效 token 上算）
+advantages = (advantages - adv_mean) * torch.rsqrt(adv_var + 1e-8) * resp_policy_mask
+```
+
+> **Critic 是什么**：本仓库的 Critic 直接**复用整个 MiniMind 骨架，只把 lm_head 换成 `Linear(768, 1)`**：
+> ```python
+> class CriticModel(MiniMindForCausalLM):
+>     self.value_head = nn.Linear(params.hidden_size, 1)
+> ```
+> 它的训练目标是让 `V(s_t)` 逼近 `returns_t`，损失是**带裁剪的均方误差**（防止 value 更新过猛）：
+> `value_loss = 0.5·max((V−R)², (clip(V, V_old±0.2)−R)²)`
+
+## 5.7 KL 惩罚与 k1 / k2 / k3 估计量
+
+光追求奖励，模型会「为了高分不择手段」—— 输出胡言乱语但恰好骗过奖励模型。**KL 惩罚是拴住它的绳子**：不许离原来的 SFT 模型太远。
+
+```
+真实 KL:  KL(π_θ ‖ π_ref) = E_{y~π_θ}[ log π_θ(y) − log π_ref(y) ]
+
+但我们只有采样点，需要一个估计量。记 r = log π_ref − log π_θ：
+
+  k1 = −r              无偏，但方差大，还可能为负（KL 不该为负）
+  k2 = r² / 2          恒非负，方差小，但有偏
+  k3 = exp(r) − r − 1  恒非负、无偏、方差小 ← 三者兼得
+```
+
+> **为什么 k3 恒非负**：`e^r ≥ 1 + r` 对所有实数成立（指数函数在 r=0 处的切线），所以 `e^r − r − 1 ≥ 0`，等号仅在 r=0（两分布相同）时取到。
+>
+> **这是 John Schulman 提出的估计量**，现在是 GRPO/PPO 实现的事实标准。
+
+```python
+# GRPO/CISPO：加在 loss 里
+kl_div = ref_per_token_logps - per_token_logps
+per_token_kl = torch.exp(kl_div) - kl_div - 1          # k3
+
+# PPO：同样加在 loss 里（不是加在 reward 里），系数 kl_coef=0.02
+kl_ref_penalty = (torch.exp(ref-mb) - (ref-mb) - 1.0) ...
+loss = policy_loss + args.vf_coef * value_loss + args.kl_coef * kl_ref_penalty
+
+# PPO 还用 k2 做早停判据
+approx_kl = (0.5 * (log_ratio ** 2) * mask).sum() / mask.sum()   # k2
+if approx_kl_val > args.early_stop_kl:   # 阈值 0.25，超了就停止本轮更新
+    break
+```
+
+> **两个值得说的实现细节**
+>
+> **① KL 加在 loss 里还是 reward 里？** 经典 RLHF 是把 KL 惩罚**加进 reward**（`r' = r − β·KL`），这样它会经过 GAE 分摊到每个 token。**本仓库是直接加在 loss 上**，实现更简单，但 KL 的信号不会参与优势估计。两种做法都常见，能说出区别是加分项。
+>
+> **② 早停用 k2 而非 k3**：早停只需要一个「偏离程度」的标量指标，k2 计算更省（不用 exp）。
+
+> **⚠ DDP 死锁的坑**：代码里特意注释了：**早停必须同步各卡的 approx_kl**。否则某张卡触发 break 退出循环、其他卡还在等它参与 all-reduce，**整个训练直接卡死**。这是多卡 RL 训练的经典陷阱。
+
+## 5.8 GRPO：用组内均值当基线
+
+**第 1 步 · 核心思想：同一个问题，让模型答 G 遍**
+
+```
+prompt x  →  y⁽¹⁾, y⁽²⁾, …, y⁽ᴳ⁾     （本仓库 G = num_generations = 6）
+          →  r⁽¹⁾, r⁽²⁾, …, r⁽ᴳ⁾     （奖励模型各打一分）
+```
+
+这 G 个回答面对的是**同一个 prompt**，难度完全一样 —— 所以它们的平均分天然就是一个**好基线**。
+
+**第 2 步 · 组内标准化得到优势**
+
+```
+A⁽ⁱ⁾ = ( r⁽ⁱ⁾ − mean(r⁽¹⁾…r⁽ᴳ⁾) ) / ( std(r⁽¹⁾…r⁽ᴳ⁾) + 1e-4 )
+```
+
+除以标准差是为了让不同难度的 prompt 产生的优势**尺度一致**。
+
+**第 3 步 · 损失：PPO 的裁剪 + k3 KL 惩罚**
+
+```
+L = −[ min(ratio·A, clip(ratio, 1±ε)·A) − β·KL_k3 ]
+```
+
+整段回答共享同一个 A（序列级优势），但 ratio 和 KL 是**逐 token** 的。
+
+```python
+# trainer/train_grpo.py
+grouped_rewards = rewards.view(-1, args.num_generations)   # [B, G]
+mean_r = grouped_rewards.mean(dim=1).repeat_interleave(G)
+std_r  = grouped_rewards.std(dim=1, unbiased=False).repeat_interleave(G)
+advantages = (rewards - mean_r) / (std_r + 1e-4)
+
+clipped_ratio = torch.clamp(ratio, 1-ε, 1+ε)
+per_token_loss = -(torch.min(ratio*A, clipped_ratio*A) - args.beta * per_token_kl)
+
+# 逐序列平均（按有效 token 数），再对 batch 平均
+policy_loss = ((per_token_loss * completion_mask).sum(1) / completion_mask.sum(1)).mean()
+```
+
+> **⚠ G 太小的代价（本项目实测）**：组内只有 G 个样本，**用它们估均值和标准差本身就有噪声**。G 越小噪声越大，极端情况 G=2 时标准差几乎不可信。
+>
+> 本项目在 Agentic RL 阶段因显存所限被迫用 **G=2**，日志里的 `GrpStd` 抖动明显。**这条结果因此不应与 G=6 的 GRPO 并排当同等口径比较** —— 这类方法学代价必须主动标注。
+
+## 5.9 CISPO：与 GRPO 只差一行，但形式完全不同
+
+```python
+# trainer/train_grpo.py · 两个分支对比
+if args.loss_type == "cispo":
+    clamped_ratio = torch.clamp(ratio, max=args.epsilon_high).detach()
+    per_token_loss = -(clamped_ratio * A * per_token_logps - β * per_token_kl)
+else:  # grpo
+    per_token_loss = -(torch.min(ratio*A, clamp(ratio,1±ε)*A) - β * per_token_kl)
+```
+
+```
+GRPO :  L = −min( ratio·A , clip(ratio)·A )      ratio 带梯度，是优化目标的一部分
+CISPO:  L = −clamp(ratio).detach() · A · log π   ratio 被切断梯度，只当权重
+```
+
+> **这是两种不同的范式**
+>
+> - **GRPO 是 PPO 式**的 —— 对 ratio 求导，梯度里会出现「ratio 的变化率」。
+> - **CISPO 是 REINFORCE 式**的 —— 回到最原始的 `A · ∇log π` 形式，只是给它乘上一个**被 detach 的重要性权重**作为修正系数。
+>
+> **为什么这样做**：detach 之后 ratio 不再参与反向，梯度形式更简单、更稳定；`clamp(max=ε_high)` **只截上界**（本仓库 `epsilon_high=5.0`），防止个别样本的权重过大主导梯度，但**不截下界** —— 低概率样本的权重小本来就不危险。
+
+> **本项目实测：两者收益相当**。200 题基准复读率：CISPO **27.6%**、GRPO **28.4%**，相差 0.75pp。
+>
+> 但要注意：**这个差异小于训练噪声**（多种子重训实测 σ≈0.80pp），所以正确表述是「**未能区分**」，而不是「确认无差异」。**区分这两句话的分量，是评测方法学上很值钱的一课。**
+
+## 5.10 DPO：把 RL 变回监督学习
+
+前面所有算法都要「采样 → 打分 → 更新」。DPO 问了一个大胆的问题：**能不能把奖励模型从公式里彻底消掉，直接在偏好数据上做监督训练？**
+
+**第 1 步 · RLHF 的标准目标：最大化奖励，同时不要跑太远**
+
+```
+max_π  E_{y~π}[ r(x,y) ] − β · KL( π ‖ π_ref )
+```
+
+**第 2 步 · 这个优化问题有闭式解**
+
+```
+π*(y|x) = (1/Z(x)) · π_ref(y|x) · exp( r(x,y) / β )
+```
+
+Z(x) 是归一化常数（配分函数）。**直觉**：最优策略就是「参考模型的分布，按奖励做指数加权」—— 奖励高的地方概率被放大。
+
+**第 3 步 · 反解出 r —— 这是最关键的一步**
+
+```
+r(x,y) = β · log( π*(y|x) / π_ref(y|x) ) + β·log Z(x)
+```
+
+**奖励可以用策略表示出来！** 换句话说，**「一个策略」和「一个奖励函数」是一一对应的**，训策略等价于训奖励。
+
+**第 4 步 · 代入 Bradley-Terry 偏好模型**
+
+```
+P(y_w ≻ y_l | x) = σ( r(x,y_w) − r(x,y_l) )
+```
+
+BT 模型是说「A 胜过 B 的概率由两者分数之差的 sigmoid 给出」。**注意这里是<u>差</u>** —— 而 `β·log Z(x)` 只依赖 x，**在相减时被完全消掉**。那个讨厌的配分函数没了。
+
+**第 5 步 · 最大似然 → DPO 损失**
+
+```
+L_DPO = −log σ( β · [ (log π_θ(y_w) − log π_ref(y_w))
+                     − (log π_θ(y_l) − log π_ref(y_l)) ] )
+```
+
+**奖励模型、Critic、采样，全部消失了。** 剩下的就是一个二分类的交叉熵，可以像监督学习一样训。
 
 ```python
 # trainer/train_dpo.py · dpo_loss · L34–50
@@ -474,119 +927,91 @@ ref_logratios = chosen_ref - reject_ref
 loss = -F.logsigmoid(beta * (pi_logratios - ref_logratios))
 ```
 
-| | PPO (RLHF) | DPO |
-| --- | --- | --- |
-| 需要奖励模型 | 要，且要单独训 | 不要 |
-| 需要 Critic | 要（价值网络） | 不要 |
-| 需要在线采样 | 要（rollout） | 不要，离线数据即可 |
-| 显存里的模型数 | 4（actor/critic/ref/reward） | 2（policy/ref） |
-| 稳定性 | 超参敏感 | 接近监督学习 |
-| 能力上限 | 可超越数据分布 | 受限于成对数据覆盖 |
+> **为什么必须减 π_ref**：只看 π_θ 的话，模型可以把 chosen 和 rejected 的概率**一起压低**来降低 loss —— 那是**灾难性遗忘**，模型什么都不敢说了。减去参考项后，**只有「相对于原模型的相对变化」才算数**。
 
-> **β 的作用（高频追问）**
+> **β 的作用（高频追问）**：β 控制策略允许偏离参考模型多远，**等价于 KL 约束强度的倒数**。
+> - **β 小（0.01）**：约束松，学得快，但容易过拟合偏好数据、丢通用能力。
+> - **β 大（0.5）**：约束紧，贴着参考模型，稳但学不动。
+> - 常用 **0.1**，本仓库默认也是 0.1。
 >
-> β 控制**策略允许偏离参考模型多远**，等价于 KL 约束的强度倒数。
+> **从公式看**：β 是 logsigmoid 输入的缩放因子。β 越大，同样的 logratio 差距越快进入 sigmoid 饱和区，梯度越小、更新越保守。
+
+> **⚠ 本项目实测：DPO 在 64M 规模完全无效**
 >
-> - **β 小（如 0.01）**：约束松，策略可以大幅偏离 → 学得快，但容易过拟合偏好数据、丢失通用能力甚至胡言乱语。
-> - **β 大（如 0.5）**：约束紧，策略贴着参考模型 → 稳，但几乎学不动。
-> - 常用 **0.1**，也是 MiniMind 的默认值。
+> 权重相对变化仅 **0.0055%**，低于 fp16 存储精度 0.098%（**等于什么都没改**）；200 题复读率 46.3% vs 基线 46.0%（p=0.66）；奖励模型打分 −1.59 vs −1.52（置信区间重叠）。
 >
-> 从 loss 形式看，β 是 logsigmoid 输入的缩放因子：β 越大，同样的 logratio 差距产生的梯度越饱和，实际更新越小。
+> **两个独立指标一致指向「什么也没发生」。** 面试时能说出「我验证过它无效，并用两个正交指标交叉确认」，比说「我用了 DPO」有价值得多。
 
-> **⚠ 本项目的实测结论**
->
-> 在 64M 这个规模上 **DPO 完全没有效果**：权重相对变化仅 0.0055%（低于 fp16 存储精度 0.098%，等于什么都没改），200 题基准复读率 46.3% vs 基线 46.0%（p=0.66），奖励模型打分 −1.59 vs 基线 −1.52（置信区间重叠）。**两个独立指标一致指向「什么也没发生」。**
->
-> 可能原因：lr 过低、β 过大、或成对数据的偏好信号在该规模下不足以产生有效梯度。**面试时能说出「我验证过它无效，并且用两个正交指标交叉确认」，比说「我用了 DPO」有价值得多。**
+## 5.11 奖励函数：本仓库到底怎么打分
 
-## 3.6 LoRA 低秩适配
-
-```
-W' = W + ΔW = W + B·A        A ∈ ℝ^(r×d),  B ∈ ℝ^(d×r),  r ≪ d
-
-参数量:  d×d  →  2×d×r      d=768, r=16 时: 589,824 → 24,576 (4.2%)
-初始化:  A ~ N(0, 0.02²),  B = 0  →  训练起点 ΔW = 0，模型行为不变
-```
-
-**直觉类比**：全量微调是「把整张 768×768 的表全改一遍」；LoRA 是「不动原表，另外记一张**薄薄的修正表**」，而这张修正表被强制写成两个瘦矩阵的乘积，秩最多只有 16。假设是：适配某个下游任务所需的权重改动，本身就是低秩的。
+前面所有算法里的那个 `r`，在本仓库是**规则项 + 奖励模型**两部分之和。这部分常被忽略，但它直接决定了模型会学成什么样。
 
 ```python
-# model/model_lora.py · apply_lora · L22–34
-for name, module in model.named_modules():
-    if isinstance(module, nn.Linear) and module.in_features == module.out_features:
-        lora = LoRA(module.in_features, module.out_features, rank=rank)
-        setattr(module, "lora", lora)
-        original_forward = module.forward
-        def forward_with_lora(x, layer1=original_forward, layer2=lora):
-            return layer1(x) + layer2(x)     # 猴子补丁，不改模型定义
-        module.forward = forward_with_lora
+# trainer/train_grpo.py · calculate_rewards · L37–68
+r = 0.5 if 20 <= len(response.strip()) <= 800 else -0.5   # 长度合理
+answer = response
+if '</think>' in response:
+    thinking, answer = response.split('</think>', 1)
+    r += 1.0 if 20 <= len(thinking.strip()) <= 300 else -0.5  # 思考段长度
+    r += 0.25 if response.count('</think>') == 1 else -0.25   # 只闭合一次
+    answer = answer.strip()
+r -= rep_penalty(answer)                       # 3-gram 复读惩罚，上限 0.5
+r += reward_model.get_score(messages, answer)  # internlm2-1.8B 打分，裁到 ±3
 ```
 
-> **⚠ 这个仓库特有的坑 —— 极佳的面试谈资**
->
-> 注意那个筛选条件：`in_features == out_features`，**只给方阵挂 LoRA**。在 MiniMind 的结构里逐个对照：
->
-> | 模块 | 形状 | 挂得上？ |
-> | --- | --- | --- |
-> | `q_proj` | 768 → 768 | ✅ |
-> | `o_proj` | 768 → 768 | ✅ |
-> | `k_proj` / `v_proj` | 768 → **384** | ❌ GQA 导致 |
-> | `gate_proj` / `up_proj` | 768 → **2432** | ❌ |
-> | `down_proj` | 2432 → 768 | ❌ |
->
-> **所以 LoRA 实际只作用在 `q_proj` 和 `o_proj` 上**，每层 2 个、共 16 个模块。
->
-> 算一下：`16 × (768×16 + 16×768) = 393,216 ≈ 0.39M`，占 63.91M 的 **0.62%** —— 与训练日志完全吻合。
->
-> **这是无心还是有意？** 值得注意的是，LoRA 原论文的主要消融结论正是「只改 W_q 和 W_v 效果就很好」，而 MoE/FFN 层通常不是适配的关键。但这里漏掉了 `v_proj`（因为 GQA 让它不是方阵），**严格说与论文推荐并不一致**。能指出这一点，说明你读代码到了实处。
+| 组成 | 范围 | 作用 |
+| --- | ---: | --- |
+| 长度合理 | ±0.5 | 防止过短或过长 |
+| 思考段长度 | +1.0 / −0.5 | 鼓励产生思考段 |
+| 单次闭合 | ±0.25 | 防止乱输出多个 `</think>` |
+| 复读惩罚 | 0 ~ −0.5 | 3-gram 重复率越高扣越多 |
+| **奖励模型打分** | ±3 | internlm2-1.8B，**唯一评价「答得好不好」的项** |
 
-> **QLoRA 是什么**：QLoRA = **4-bit 量化的基座 + fp16 的 LoRA 适配器**。基座冻结所以可以激进量化（NF4 数据类型 + 双重量化），只有 LoRA 分支保持高精度参与梯度。再配合 paged optimizer 把优化器状态换出到内存，能在单张 24GB 卡上微调 65B 模型。**MiniMind 本身没实现 QLoRA**（64M 模型没必要），但这是必答题。
+> **⚠ 奖励函数漏洞的真实后果**
+>
+> 注意 `answer = answer_content.strip()` 这一行：**如果模型在 `</think>` 之后什么都不写，answer 就是空串**。空串的 `rep_penalty` 恒为 0（没有 3-gram），而规则项那 +1.75 照拿不误。
+>
+> 本项目的 PPO **真的找到了这个洞**：91% 的采样输出答案为空。更关键的是 —— 在这个奖励模型眼里，**空答案（−0.98）竟然比 64M 模型真写出来的答案（−1.17）得分更高**。
+>
+> **这不是「奖励函数写错了」，而是「奖励模型对这个能力段区分度不够」**，两者的修法完全不同。
 
-## 3.7 GRPO / CISPO / PPO 与 Agentic RL
+## 5.12 五种算法总对比
 
-| 算法 | 优势估计 | 需要 Critic | 本项目实测 |
-| --- | --- | --- | --- |
-| **PPO** | GAE（时序差分） | 要 | 两次独立训练均退化，见下 |
-| **GRPO** | **组内相对**：同 prompt 采 G 个回答，用组内均值方差标准化 | 不要 | 复读率 45.3% → 26.4% |
-| **CISPO** | 同 GRPO，裁剪方式不同 | 不要 | 复读率 45.3% → 27.2% |
+| 维度 | PPO | GRPO | CISPO | DPO |
+| --- | --- | --- | --- | --- |
+| 基线来源 | Critic 网络 | 组内均值 | 组内均值 | 不需要 |
+| 优势估计 | GAE（逐 token） | 组内标准化（序列级） | 同 GRPO | 不需要 |
+| ratio 用法 | 参与目标，带梯度 | 参与目标，带梯度 | **detach，只当权重** | 无 |
+| 裁剪 | 双边 1±ε | 双边 1±ε | 只截上界 ε_high | 无 |
+| KL 约束 | k3 加在 loss | k3 加在 loss | k3 加在 loss | 隐含在 β 里 |
+| 需要奖励模型 | 要 | 要 | 要 | **不要** |
+| 需要在线采样 | 要 | 要 | 要 | **不要** |
+| 显存里的模型数 | 4 | 3 | 3 | **2** |
+| **本项目实测复读率** | 7.4%（退化） | 28.4% | 27.6% | 46.3%（无效） |
+| **本项目实测耗时** | 7.3 h | 18.0 h | 18.0 h | 短 |
 
-> **GRPO 为什么能省掉 Critic**
->
-> PPO 需要 Critic 来估计「这个状态的期望回报」，作为基线来降低策略梯度的方差。GRPO 换了个更省事的基线：**对同一个 prompt 采样 G 个回答，直接用这一组的均值当基线**、标准差做归一化。
->
-> 好处是省掉一整个价值网络（显存与训练成本都降）；代价是**组内样本数 G 太小时基线噪声很大**。本项目在 Agentic RL 阶段被迫用 G=2（显存所限），日志里的 `GrpStd` 抖动明显，这是必须在报告里标注的方法学代价。
-
-> **⚠ PPO 的两种退化（真实观测）**
->
-> 本项目的 PPO 与上游官方发布的 PPO 权重，**两次完全独立的训练，产生了两种截然不同的退化**：
->
-> - **本项目**：91% 的采样输出在 `</think>` 之后**为空** —— 模型把内容留在思考段，答案留空。因为在该奖励模型眼里，空答案（−0.98）竟然比 64M 模型真写出来的答案（−1.17）得分更高。
-> - **官方权重**：200 道题只产出 **44 种不同开头**，其中两种占了 105 道 —— 无论问什么都回同一篇「平衡技术与伦理」的散文。
->
-> **而这两个模型在复读率指标上分列全场第 1 和第 2 名。** 这是「指标很好但模型是坏的」最生动的实例。
+> **⚠ 读这张表的注意事项**：PPO 那个 7.4% 的复读率**不是最好，是坏掉了** —— 事实准确率 0.0%、84% 的答案为空。**指标最漂亮的那一列，恰恰是唯一坏掉的模型。** 详见 §7.3。
 
 ---
 
-# 第四章 · 数据处理管线
+# 第六章 · 数据处理管线
 
-## 4.1 Tokenizer 与 Byte-level BPE
+## 6.1 Tokenizer 与 Byte-level BPE
 
-Tokenizer 的职责是把字符串双向映射成整数序列。**Byte-level BPE** 的构建过程：
-
-1. **从字节开始**：初始词表是 256 个字节值。这一步保证**永远不会出现 UNK** —— 任何字符（含 emoji、生僻字）最差也能拆成字节。
+1. **从字节开始**：初始词表是 256 个字节值。这保证**永远不会出现 UNK** —— 任何字符（含 emoji、生僻字）最差也能拆成字节。
 2. **统计相邻对频率**：在语料上数哪两个相邻单元一起出现得最多。
 3. **合并最高频对**，作为新词加入词表。
 4. **重复**到词表达到目标大小（MiniMind 是 6400）。
 
 > **6400 词表的取舍**
 >
-> **好处**：embedding 层只要 6400×768 = 4.92M（大模型词表 15 万，同样宽度要 115M）；输出 logits 是 `[B, S, 6400]` 而非 `[B, S, 150000]`，训练显存与算力都省一个量级。
+> **好处**：embedding 只要 6400×768 = 4.92M（大模型词表 15 万，同宽度要 115M）；输出 logits 是 `[B,S,6400]` 而非 `[B,S,150000]`，训练显存与算力都省一个量级。
 >
-> **代价**：同一段中文被切成**更多** token（词表小则合并少），等价于有效上下文变短、每字推理步数更多。
+> **代价**：同一段中文被切成**更多** token，等价于有效上下文变短、每字推理步数更多。
 >
-> **README 里的一句关键提醒**：PPL 是按 token 统计的，**跨 tokenizer 比较 PPL 没有意义**，这种情况下 BPB（Bits Per Byte）才有可比性。这是个很容易被问倒的细节。
+> **关键提醒**：PPL 按 token 统计，**跨 tokenizer 比 PPL 没有意义**，那种情况要用 BPB。
 
-## 4.2 ChatML 模板
+## 6.2 ChatML 模板
 
 ```
 <|im_start|>system
@@ -598,32 +1023,30 @@ Tokenizer 的职责是把字符串双向映射成整数序列。**Byte-level BPE
        ↑ SFT 的 loss 只覆盖这一段（含结尾的 im_end）
 ```
 
-特殊 token：`bos = <|im_start|>`，`eos = <|im_end|>`，`pad = <|endoftext|>`。模板还支持 `tools`（工具调用，渲染成 `<tools>` XML 块）与 `open_thinking`（思考段开关）。
+特殊 token：`bos = <|im_start|>`，`eos = <|im_end|>`，`pad = <|endoftext|>`。模板还支持 `tools`（渲染成 `<tools>` XML 块）与 `open_thinking`（思考段开关）。
 
-> **⚠ 本项目踩过的坑**
+> **⚠ 本项目踩过的坑**：RL 阶段 `RLAIFDataset` 构造 prompt 时会传 `open_thinking`（由 `--thinking_ratio` 控制）。**复现奖励曲线时我自己拼 chat 模板，漏了这个参数**，模型因此不输出 `</think>`，规则奖励里 think 相关的两项（合计 +1.25）全部拿不到，重建值整体偏低约 1.4，**方向都错了**。
 >
-> RL 阶段用 `RLAIFDataset` 构造 prompt 时会传 `open_thinking`（由 `--thinking_ratio` 控制概率）。**后来复现奖励曲线时我自己拼 chat 模板，漏了这个参数**，模型因此不输出 `</think>`，规则奖励里与 think 相关的两项（合计最高 +1.25）全部拿不到，重建值整体偏低约 1.4，方向都错了。
->
-> **教训**：任何需要复现训练时行为的评测，**必须复用训练时的 Dataset 类**，不要自己拼模板。而抓住这个错误的是预先设的**校准对照**（拿一个日志完整的模型去验证重建流程）。
+> **教训**：任何要复现训练时行为的评测，**必须复用训练时的 Dataset 类**。而抓住这个错误的是预先设的**校准对照**（拿一个日志完整的模型验证重建流程）。
 
-## 4.3 四种 Dataset 对比
+## 6.3 四种 Dataset 对比
 
 | 类 | 返回 | 关键处理 | 用于 |
 | --- | --- | --- | --- |
-| `PretrainDataset` | `(input_ids, labels)` | 拼 BOS/EOS，pad 位置置 `-100` | `train_pretrain` |
-| `SFTDataset` | `(input_ids, labels)` | `generate_labels` 只保留 assistant 段 | `train_full_sft` / `train_distillation` |
-| `DPODataset` | 6 个张量 | chosen/rejected 各自的 x/y/mask，**已在此处做好 shift** | `train_dpo` |
-| `RLAIFDataset` | `{'prompt'}` | 只给 prompt（`conversations[:-1]`），回答留给模型采样 | `train_grpo` / `train_ppo` / `train_opd` |
+| `PretrainDataset` | `(input_ids, labels)` | 拼 BOS/EOS，pad 位置置 −100 | train_pretrain |
+| `SFTDataset` | `(input_ids, labels)` | `generate_labels` 只保留 assistant 段 | train_full_sft / distillation |
+| `DPODataset` | 6 个张量 | chosen/rejected 各自 x/y/mask，**已在此处 shift** | train_dpo |
+| `RLAIFDataset` | `{'prompt'}` | 只给 prompt，回答留给模型采样 | train_grpo / ppo / opd |
 
-> **一个容易混淆处**：`SFTDataset` 返回的 `labels` **没有**提前 shift，shift 在模型 `forward` 里做；而 `DPODataset` 返回的 `x/y` **已经**错开一位了（`input_ids[:-1]` 与 `input_ids[1:]`）。两条路线的约定不同，**混用会静默地错一位**，loss 看着正常但模型学歪。
+> **⚠ 容易混淆处**：`SFTDataset` 返回的 labels **没有**提前 shift，shift 在模型 `forward` 里做；而 `DPODataset` 返回的 x/y **已经**错开一位。**两条路线约定不同，混用会静默错一位**，loss 看着正常但模型学歪。
 
 ---
 
-# 第五章 · 实测参照数据
+# 第七章 · 实测参照数据
 
-> 以下全部是本项目在**单张 RTX 5060 8GB** 上的真实测量，不是上游 README 转述。合计 86.4 GPU 小时，六个训练阶段零崩溃零重拉。
+> 以下全部是本项目在**单张 RTX 5060 8GB** 上的真实测量。合计 86.4 GPU 小时，六个训练阶段零崩溃零重拉。
 
-## 5.1 资源与耗时参照表
+## 7.1 资源与耗时参照表
 
 | 阶段 | 步数 | batch × 累积 | seq | s/步 | 耗时 | 峰值显存 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -635,35 +1058,27 @@ Tokenizer 的职责是把字符串双向映射成整数序列。**Byte-level BPE
 | Agentic RL | 39,988 | 1 × 1 | ≤1300 | 3.564 | 38.5 h | 7.8 GB |
 | GRPO / CISPO | 19,502 | 1 × 1 | 768+256 | 3.33 | 18.0 h | 6.9 GB |
 
-> **读这张表的方法**：**监督训练（预训练/SFT/蒸馏）单步在 0.2–0.3 秒，RL 单步 1.4–3.6 秒 —— 差一个数量级。** 原因是 RL 每步要先**自回归生成**几百个 token（几百次前向），而监督训练只要一次前向一次反向。
+> **读这张表的方法**：**监督训练单步 0.2–0.3 秒，RL 单步 1.4–3.6 秒 —— 差一个数量级。** 因为 RL 每步要先**自回归生成**几百个 token（几百次前向），监督训练只要一次前向一次反向。
 >
-> 所以做 RL 的时间预算应该按「生成的总 token 数」估，而不是按步数估。
+> **做 RL 的时间预算应该按「生成的总 token 数」估，而不是按步数估。**
 
-## 5.2 收敛参照：loss 降到多少算好
+## 7.2 收敛参照
 
-| 阶段 | 起点 | 收敛 | 怎么判断 |
+| 阶段 | 起点 | 收敛 | 判断依据 |
 | --- | ---: | ---: | --- |
-| 预训练（dense） | ≈8.76 | ≈1.87 | 初值 ≈ ln(6400)=8.76，即均匀猜测 |
+| 预训练（dense） | ≈8.76 | ≈1.87 | 初值 = ln(6400)，即均匀猜测 |
 | 预训练（MoE） | ≈8.76 | ≈1.96 | 末 100 步均值，σ=0.165 |
 | SFT（MoE） | 1.98 | 1.58 | 末 30 步均值 |
 
-> **一个必须知道的锚点**
+> **⚠ 不要拿单个 batch 的 loss 下结论**：本项目实测，MoE 预训练最后 100 个采样点里，单点 loss 在 **1.58 到 2.41** 之间摆动（σ=0.165）。我一度根据末尾单点的 1.7075 得出「MoE 击败了 dense 的 1.87」，**随后被 30 点均值 1.9440 推翻**。
 >
-> 训练刚开始时 loss 应该约等于 **ln(vocab_size) = ln(6400) = 8.76** —— 这是模型对全词表均匀猜测的交叉熵。
->
-> **如果开局 loss 远大于 8.76**，说明初始化或 label 构造有问题；**如果远小于**，八成是标签泄漏（比如忘了 shift）。**这是排查训练脚本最快的第一个检查点。**
+> **正确做法**：取窗口均值并报标准差。更进一步，训练 loss 不能跨阶段比 —— 要比就在同一批留出数据上重新算。
 
-> **⚠ 不要拿单个 batch 的 loss 下结论**
->
-> 本项目实测：MoE 预训练最后 100 个采样点里，单点 loss 在 **1.58 到 2.41** 之间摆动（σ=0.165）。我一度根据末尾单点的 1.7075 得出「MoE 击败了 dense 的 1.87」，**随后被 30 点均值 1.9440 推翻**。
->
-> **正确做法**：取窗口均值并报出标准差。更进一步，训练 loss 本身不能跨阶段比 —— 要比就在同一批留出数据上重新算。
+## 7.3 效果对比与消融
 
-## 5.3 效果对比与消融
+200 题基准（10 类各 20 题，贪心解码）：
 
-200 题基准（10 类各 20 题，贪心解码），指标包含复读率与三道正交守卫：
-
-| 模型 | 3-gram 复读率 | 事实准确率 | 答案为空 | 回复多样性 | 长度 |
+| 模型 | 复读率 | 事实准确率 | 答案为空 | 回复多样性 | 长度 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `pretrain` | 62.7% | **0.0%** | 0.0% | **43.5%** | 530 |
 | `full_sft`（基线） | 46.0% | 37.1% | 0.0% | 95.5% | 332 |
@@ -677,34 +1092,30 @@ Tokenizer 的职责是把字符串双向映射成整数序列。**Byte-level BPE
 >
 > **PPO 的复读率 7.4% 是全场最低（看起来最好），事实准确率却是 0.0%** —— 因为它 84% 的回答在 `</think>` 之后是空的。
 >
-> **只报复读率的排行榜，冠军会是一个根本没有答案的模型。** 抓住它的不是被优化的那个指标，而是「答案为空率」和「回答长度」这两个旁证。
+> **只报复读率的排行榜，冠军会是一个根本没有答案的模型。** 抓住它的不是被优化的那个指标，而是「答案为空率」和「回答长度」两个旁证。
 >
-> 更进一步：官方 PPO 权重**绕过了**这两道守卫（长度 417 全场最长、空答案 0%），只有**相关性**与**准确率**抓住了它。归纳出的规律是：**只看输出的指标原则上总能被某种退化绕过；把输出锚定到输入的指标才难被绕过。**
+> 更进一步：官方 PPO 权重**绕过了**这两道守卫（长度 417 全场最长、空答案 0%），只有**相关性**与**准确率**抓住了它。归纳出的规律：**只看输出的指标原则上总能被某种退化绕过；把输出锚定到输入的指标才难被绕过。**
 
-> **SFT 前后的本质差异**：看 `pretrain` 那一行 —— 准确率 0.0%、回复多样性 43.5%、长度 530。它**不是答得差，是根本不在回答**：给它一个问题，它接着往下写文章。**SFT 带来的不是「知识」，而是「对话这件事本身」**：知道该在哪停、该以什么格式回应、什么时候轮到自己说话。
+> **SFT 前后的本质差异**：看 `pretrain` 那一行 —— 准确率 0.0%、回复多样性 43.5%、长度 530。它**不是答得差，是根本不在回答**。**SFT 带来的不是「知识」，而是「对话这件事本身」。**
 
-## 5.4 8GB 显存工程
+## 7.4 8GB 显存工程
 
 > **⚠ 最大的坑：显存溢出不报 OOM**
 >
-> 这台机器的 NVIDIA 驱动开着 **system memory fallback**：显存装不下时**不抛异常**，而是静默回落到系统内存，速度掉 4–20 倍。
+> 这台机器的 NVIDIA 驱动开着 **system memory fallback**：显存装不下时**不抛异常**，静默回落到系统内存，速度掉 4–20 倍。
 >
 > 实测：MoE 预训练 `bs=32` 是 **4.882 s/步**，`bs=16` 是 **0.242 s/步** —— 前者跑完要 215 小时，后者 8.5 小时。**两个都「正常运行」，代价差 25 倍。**
 
 | 撞坑形态 | 触发方式 | 识别信号 |
 | --- | --- | --- |
 | batch 过大 | 预训练 bs=32 | 4.882 vs 0.242 s/步 |
-| 组大小过大 | Agentic RL G=4 | 每样本 6.82 vs 1.72 s（慢 296%，非线性） |
+| 组大小过大 | Agentic RL G=4 | 每样本 6.82 vs 1.72 s（慢 296%，**非线性**） |
 | 序列过长 | 默认 `max_total_len=2500` | 单层 scores 763 MB → 真 OOM |
 | 外部程序挤占 | 浏览器/IDE 占显存 | GPU 100% 但功耗仅 41 W |
 
-> **可复用的判据**：**「GPU 利用率 100% + 功耗异常低 + 空闲显存不足 200 MB」** 三者同时出现，基本可判定为显存颠簸。真正在算的时候，卡的功耗应该接近 TDP。**光看利用率会被骗** —— 等 PCIe 传输也算「忙」。
->
-> 解法不是估算而是实测：建模型、真跑 5 步前反向、读 `torch.cuda.max_memory_reserved()`，在「空闲显存 − 余量」下选最大可行 batch。
+> **可复用的判据**：**「GPU 利用率 100% + 功耗异常低 + 空闲显存不足 200 MB」** 三者同时出现，基本可判定为显存颠簸。真正在算时卡的功耗应接近 TDP。**光看利用率会被骗** —— 等 PCIe 传输也算「忙」。
 
-> **O(S²) 是可以先算后验的**
->
-> 朴素注意力的单层 scores 矩阵 = `B × H × S² × 4 B`。代入不同配置：
+> **O(S²) 可以先算后验**：朴素注意力单层 scores = `B × H × S² × 4 B`
 >
 > | 配置 | 单层 scores | 结果 |
 > | --- | ---: | --- |
@@ -712,20 +1123,20 @@ Tokenizer 的职责是把字符串双向映射成整数序列。**Byte-level BPE
 > | `S=1280, B=4` | 200 MB | 能跑但慢 |
 > | `S=1280, B=2` | 100 MB | 采用 |
 >
-> **这三个数是先用公式算出来、再实测确认的，不是撞出来的。** 面试讲显存优化时，「我先算后验」比「我调小了 batch」高一个层次。
+> **这三个数是先用公式算出来、再实测确认的。** 面试讲显存优化时，「我先算后验」比「我调小了 batch」高一个层次。
 
 ---
 
-# 第六章 · 面试高频题与回答模板
+# 第八章 · 面试高频题与回答模板
 
 > 每题给出**一句话主线**（加粗，先说结论）+ 展开。建议按主线背，展开部分理解后用自己的话讲。
 
 ### Q1 · 请用 2 分钟介绍一下你的 MiniMind 项目。
-*项目介绍类*
+*项目介绍*
 
 > **我在一张 8GB 的消费级显卡上，从随机初始化开始完整走通了一个 64M 参数大模型的全生命周期：分词器、预训练、SFT、知识蒸馏、四条对齐路线，一共 86 GPU 小时、六个阶段零崩溃。**
 
-**结构层面**是 Decoder-only：8 层、hidden 768、GQA 8 查询头配 4 个 KV 头、RoPE 位置编码 base 取 1e6、RMSNorm、SwiGLU，另外做了 MoE 版本（4 专家 top-1，198M 总参但激活只有 63.94M，与 dense 的 63.91M 几乎相同，所以两者可以公平对比）。
+**结构层面**是 Decoder-only：8 层、hidden 768、GQA 8 查询头配 4 个 KV 头、RoPE base 取 1e6、RMSNorm、SwiGLU，另外做了 MoE 版本（4 专家 top-1，198M 总参但激活只有 63.94M，与 dense 的 63.91M 几乎相同，所以两者可以公平对比）。
 
 **但这个项目我最想讲的不是跑通了多少阶段，而是评测。** 我发现只用复读率这一个指标时，排行榜冠亚军是两个根本没有答案的坏模型 —— PPO 有 84% 的回答是空的，却拿了最低的复读率。为此我建了 200 题基准、加了准确率、相关性、答案为空率等六道正交守卫，还用多种子重训量化了训练方差，据此**主动撤回了自己之前写下的四条结论**。
 
@@ -734,277 +1145,313 @@ Tokenizer 的职责是把字符串双向映射成整数序列。**Byte-level BPE
 ---
 
 ### Q2 · 为什么用 GQA 而不是 MHA？减的为什么是 KV 而不是 Q？
-*架构细节类*
+*架构细节*
 
 > **因为推理时被缓存的只有 K 和 V，Q 每步新算完就丢，所以要压显存就只能压 KV。**
 
-MiniMind 用 8 个 Q 头配 4 个 KV 头，`n_rep=2`，KV Cache 直接减半。代码里就是 `repeat_kv(xk, 2)` 把 4 个 KV 头复制成 8 份去对齐 Q 头。
+MiniMind 用 8 个 Q 头配 4 个 KV 头，`n_rep=2`，KV Cache 直接减半。代码里就是 `repeat_kv(xk, 2)`。再往下是 MQA（所有 Q 头共用 1 份 KV），缓存降到 1/8 但质量损失明显，**GQA 是这条线上的折中**。
 
-再往下是 MQA（所有 Q 头共用 1 份 KV），缓存能降到 1/8，但质量损失明显。**GQA 是这条线上的折中**，实践中几乎无损。
-
-**量化一下**：MiniMind 的 KV Cache 是 `2 × 8层 × 4头 × 96 × 2 B = 12 KB/token`。如果用 MHA 就是 24 KB/token。长上下文推理时这个差距会直接决定能开多大的并发。
+**量化一下**：`2 × 8层 × 4头 × 96 × 2B = 12 KB/token`，MHA 则是 24 KB。长上下文推理时这直接决定能开多大并发。
 
 ---
 
-### Q3 · RoPE 是怎么把绝对位置变成相对位置的？为什么能外推？
-*架构细节类*
+### Q3 · RoPE 怎么把绝对位置变成相对位置？为什么能外推？
+*架构细节*
 
 > **RoPE 不给向量「加」位置信息，而是按位置把 Q、K 旋转一个角度；两个向量做内积时，结果只依赖它们的位置之差。**
 
-数学上：`⟨R(m)q, R(n)k⟩ = f(q, k, m−n)`。**直觉是两根时钟指针 —— 注意力算的是夹角，而夹角只跟「差几格」有关。**
+数学上 `⟨R(m)q, R(n)k⟩ = f(q, k, m−n)`。**直觉是两根时钟指针 —— 注意力算的是夹角，夹角只跟「差几格」有关。**
 
-**关于外推**，要说清楚 RoPE 本身**并不天然外推**：超出训练长度后会遇到没见过的角度，效果会崩。真正让它能外推的是两件事：
-
-1. **把 base 调大**。MiniMind 用 1e6 而非常见的 1e4，低频维度周期从约 6.3 万拉长到 628 万，长距离的位置区分度衰减更慢。
-2. **YaRN 等插值方法**。按频率分段：高频维度管局部关系，不动；低频维度管全局位置，除以 factor 压回训练见过的范围；中间用 ramp 线性过渡。MiniMind 把它做成**推理期开关**，不用重训。
+**关于外推**要说清楚 RoPE 本身**并不天然外推**：超出训练长度会遇到没见过的角度，效果崩。真正让它能外推的是两件事：① **把 base 调大**（MiniMind 用 1e6 而非 1e4，低频周期从 6.3 万拉到 628 万）；② **YaRN 分段插值** —— 高频不动、低频除以 factor 压回训练范围、中间 ramp 过渡，MiniMind 做成推理期开关不用重训。
 
 ---
 
-### Q4 · RMSNorm 相比 LayerNorm 省了什么？为什么内部要转 fp32？
-*架构细节类*
+### Q4 · 为什么交叉熵就是语言模型的正确损失？
+*训练机制 · 地基题*
 
-> **省掉了「减均值」和「加偏置」两步，只保留缩放；转 fp32 是因为平方和在低精度下会溢出或丢精度。**
+> **因为交叉熵就是最大似然本身 —— 不是「随便选的一个损失函数」。**
 
-`LayerNorm: γ(x−μ)/√(σ²+ε)+β` ｜ `RMSNorm: γx/√(mean(x²)+ε)`。实践发现减均值那步在 Transformer 里收益很小，去掉后少一次归约、少一组参数，更快。
+推导四步：① 语言模型要最大化语料的概率 `P(x₁…x_T)`；② 链式法则把它拆成 `∏ P(x_t|x_<t)`，这一步是恒等变形没有近似；③ 连乘会下溢，取对数变连加；④ 加负号变成最小化，得到**负对数似然 NLL**。
 
-**fp32 那个细节值得主动说**：代码是 `(self.weight * self.norm(x.float())).type_as(x)`。混合精度下 x 是 bf16，而 768 个数的平方和在 bf16 下极易出问题，所以先升精度算完再降回去。**「归一化层内部保持 fp32」是所有主流实现的共识。**
+而 NLL **恰好等于**交叉熵 —— 因为真实分布是 one-hot，交叉熵 `−Σ q log p` 里只有真值那一项非零。
+
+**再补一个能立刻用上的推论**：随机初始化时输出接近均匀分布，所以 loss ≈ `ln(vocab_size)`。MiniMind 是 ln(6400)=8.76。**这是排查训练脚本最快的第一个检查点** —— 远大于说明初始化或 label 有问题，远小于说明标签泄漏（最常见是忘了 shift）。
 
 ---
 
 ### Q5 · SFT 时如何只对 Answer 计算 loss，Mask 掉 Prompt？
-*训练机制类 · 最高频*
+*训练机制 · 最高频*
 
 > **把 labels 初始化为全 −100，再用 token id 序列匹配定位每一段 assistant 回答，只把这些区间填回真实 id；`cross_entropy(ignore_index=-100)` 会自动跳过其余位置。**
 
 MiniMind 的实现在 `SFTDataset.generate_labels`：以 `<|im_start|>assistant\n` 的 token 序列为起点标记，扫到 `<|im_end|>` 为终点，中间全部填回。
 
-**三个能拉开差距的细节**：
+**要强调一点**：prompt 部分**依然完整参与前向、依然被注意力看到**，只是不产生梯度。模型学的是「给定这个 prompt 该回什么」，不是「怎么把 prompt 写出来」。
 
-1. 多轮对话有**多个** assistant 段，必须循环扫完，只处理第一段是常见 bug；
-2. `<|im_end|>` 本身**要计入** loss，否则模型不知道该在哪停下来，推理时会一直说；
-3. 匹配必须在 **token id 层面**做而非字符串层面 —— 同样的文字在不同上下文可能被切成不同的 token。
+**三个能拉开差距的细节**：① 多轮对话有**多个** assistant 段，必须循环扫完；② `<|im_end|>` 本身**要计入** loss，否则模型学不会停；③ 匹配必须在 **token id 层面** —— 同样的文字在不同上下文可能切成不同 token。
 
 ---
 
-### Q6 · Pretrain 和 SFT 到底差在哪？为什么 SFT 之后还要 RLHF？
-*训练机制类*
+### Q6 · 什么是 Teacher Forcing？它有什么副作用？
+*训练机制*
 
-> **Pretrain 和 SFT 用的是同一个模型、同一个损失函数，唯一差别是 labels 里哪些位置被设成 −100；而 RLHF 引入的是交叉熵根本表达不了的相对信号和负向信号。**
+> **训练时不管模型第 t 步预测成什么，第 t+1 步喂进去的都是真实的第 t 个词 —— 这样 T 个位置可以并行算完，而不用像推理那样串行 T 次。**
 
-**Pretrain** 每个 token 都算 loss，学的是语言分布本身。我实测过：纯预训练模型在 200 题上事实准确率 0.0%、回复多样性只有 43.5% —— 它不是答得差，是**根本不在回答**，你问它问题它接着往下写文章。
+**副作用是 exposure bias**：训练时模型看到的永远是完美前文，推理时看到的是自己生成的、可能有错的前文。**一旦第一步错了，后面就在训练中从没见过的分布上走。**
 
-**SFT** 只对 assistant 段算 loss，学的是「对话这件事」：什么时候轮到自己说、该以什么格式回应、在哪停。
-
-**RLHF/DPO** 的必要性在于：SFT 是模仿，它只能说「这个是对的」，永远说不出「这个比那个好」，更说不出「不要这样答」。**相对信号和负向信号是交叉熵表达不了的。**
+**这正是 RL 和 on-policy 蒸馏存在的根本理由** —— 让模型在自己会走到的状态上被评价和修正，而不是只在别人写好的正确轨迹上学。能把 Teacher Forcing 和 RL 的必要性串起来讲，说明理解到位了。
 
 ---
 
-### Q7 · DPO 相比 PPO 少了什么？Loss 怎么写？
-*算法对比类*
+### Q7 · 策略梯度是什么？为什么需要基线？
+*强化学习 · 地基题*
 
-> **DPO 少了奖励模型、Critic 和在线采样三样东西 —— 显存里从 4 个模型降到 2 个，训练过程接近监督学习。**
+> **策略梯度定理说：`∇J = E[ R · ∇log π ]` —— 拿到高分的回答就提高它的对数概率，低分的就压低，R 就是每个样本梯度的权重。**
 
-`L = −log σ( β · [ (logπ_θ(y_w) − logπ_ref(y_w)) − (logπ_θ(y_l) − logπ_ref(y_l)) ] )`
+关键推导是**对数导数技巧** `∇π = π·∇log π`，它把「对分布求导」变回了「在分布下求期望」，于是可以用采样来估计。
 
-**核心洞察**：如果奖励模型采用 Bradley-Terry 形式，最优策略与奖励之间有闭式关系，可以把奖励模型解析地消掉，于是 RLHF 变成了偏好数据上的一个分类问题。
+**为什么需要基线**：原始形式方差极大。假设所有回答分数都在 5 到 7 之间 —— 它们全是正的，于是**所有**回答的概率都被推高，真正有用的信号（「7 分比 5 分好」）淹没在共同偏移里。
 
-**为什么必须减 π_ref**：只看 π_θ 的话，模型可以把 chosen 和 rejected 的概率**一起**压低来降 loss，那是灾难性遗忘；减去参考项后，只有**相对**变化才算数。
+减去一个不依赖动作的基线 b，**期望不变**（因为 `E[∇log π] = ∇(Σπ) = ∇1 = 0`）**但方差大幅下降** —— 这是免费的午餐。于是 `A = R − b`，问的从「好不好」变成「**比平均好多少**」，也就有了真正的负信号。
+
+---
+
+### Q8 · PPO 的裁剪为什么外面要套一个 min？
+*强化学习 · 高区分度*
+
+> **因为如果只做 clip，当 ratio 已经超出范围时梯度就恒为 0，模型「跑错方向跑太远」之后再也回不来了。min 保证了这种情况下梯度仍然起作用。**
+
+`L = min( ratio·A , clip(ratio, 1−ε, 1+ε)·A )`。分四种情况看：
+
+① **好动作已提升很多**（A>0, ratio>1+ε）→ min 选 clip 项 → 梯度截断，不再继续推高。
+② **坏动作已压低很多**（A<0, ratio<1−ε）→ min 选 clip 项 → 截断。
+③ 正常范围 → 选 ratio 项 → 正常更新。
+④ **坏动作反而被推高了**（A<0, ratio>1+ε）→ 此时 ratio 项**更负**，min 选中它 → **不截断，让梯度把它拉回来。**
+
+**第四种情况就是 min 的全部意义**：裁剪只在「已经朝对的方向走够了」时刹车，绝不在「走错方向」时刹车。
+
+---
+
+### Q9 · GAE 是干什么的？为什么需要它？
+*强化学习*
+
+> **GAE 把「整段回答的一个分数」合理地分摊回每一个 token，让每个 token 都有自己的优势值。**
+
+先是 **TD 误差** `δ_t = r_t + γ·V(s_{t+1}) − V(s_t)`，直觉是「我原本以为这局值 V(s_t) 分，走一步后实际拿到 r_t 且新局面值 V(s_{t+1}) 分，**δ 就是这次比预期好了多少**」。
+
+然后 **GAE 把未来所有惊喜按 γλ 衰减加起来**：`A_t = δ_t + γλ·A_{t+1}`，倒着递推一遍算完。λ 控制偏差-方差权衡：λ=0 只看一步（偏差大方差小），λ=1 看完整轨迹（无偏方差大）。本仓库用 `λ=0.95, γ=1.0`。
+
+**为什么在 LLM 里特别重要**：本仓库的奖励是**稀疏终局奖励** —— 中间 token 全是 0，整段回答的分数只加在最后一个 token 上。**GAE 的作用就是把这个终局分数分摊回前面每一个 token**，否则前面的 token 拿不到任何学习信号。
+
+---
+
+### Q10 · GRPO 为什么能省掉 Critic？代价是什么？
+*强化学习 · 算法对比*
+
+> **PPO 用 Critic 估计状态价值来当基线；GRPO 换成「同一个 prompt 采 G 个回答，用这一组的均值当基线」。**
+
+具体是 `A⁽ⁱ⁾ = (r⁽ⁱ⁾ − mean(组)) / (std(组) + 1e-4)`。这 G 个回答面对**同一个 prompt**、难度完全一样，所以它们的平均分天然就是好基线。除以标准差是为了让不同难度的 prompt 产生的优势**尺度一致**。
+
+**省掉一整个价值网络**，显存和训练成本都降一大截。
+
+**代价是组内样本数 G 太小时基线噪声很大。** 我在 Agentic RL 阶段因显存所限被迫用 G=2，日志里的 `GrpStd` 抖动明显 —— 这条结果不应和 G=6 的并排当同等口径比较。**这类方法学代价必须主动标注。**
+
+---
+
+### Q11 · CISPO 和 GRPO 差在哪？
+*强化学习 · 源码级*
+
+> **代码上只差一行，但形式完全不同：GRPO 是 PPO 式的（ratio 带梯度、参与优化目标），CISPO 是 REINFORCE 式的（ratio 被 detach，只当权重系数）。**
+
+`GRPO : L = −min(ratio·A, clip(ratio)·A)`
+`CISPO: L = −clamp(ratio).detach() · A · log π`
+
+**CISPO 回到了最原始的 `A·∇log π` 形式**，只是给它乘一个被切断梯度的重要性权重作修正。detach 之后 ratio 不参与反向，梯度形式更简单更稳定。
+
+另外 `clamp(max=ε_high)` **只截上界**（本仓库 5.0），防止个别样本权重过大主导梯度，**不截下界** —— 低概率样本权重小本来就不危险。
+
+**本项目实测两者收益相当**：复读率 27.6% vs 28.4%，差 0.75pp。但这个差异**小于训练噪声**（多种子实测 σ≈0.80pp），所以正确表述是「未能区分」而非「确认无差异」。
+
+---
+
+### Q12 · DPO 是怎么把奖励模型消掉的？
+*强化学习 · 推导题*
+
+> **因为 RLHF 那个「最大化奖励 + KL 约束」的优化问题有闭式解，反解出来发现奖励可以用策略表示；再代入 Bradley-Terry 模型时，那个讨厌的配分函数在<u>相减</u>时被完全消掉。**
+
+五步推导：① 目标 `max E[r] − β·KL(π‖π_ref)`；② 闭式解 `π* ∝ π_ref · exp(r/β)`；③ 反解 `r = β·log(π*/π_ref) + β·log Z(x)`；④ 代入 BT 模型 `P(y_w≻y_l) = σ(r_w − r_l)`，**log Z(x) 只依赖 x，相减时抵消**；⑤ 最大似然得到 DPO 损失。
+
+`L = −log σ( β·[(logπ_θ(y_w) − logπ_ref(y_w)) − (logπ_θ(y_l) − logπ_ref(y_l))] )`
+
+**为什么必须减 π_ref**：只看 π_θ 的话，模型可以把 chosen 和 rejected 的概率**一起压低**来降 loss —— 那是灾难性遗忘。减去参考项后只有**相对**变化才算数。
 
 **代价**：DPO 受限于成对数据的覆盖范围，无法像 PPO 那样通过采样探索超出数据分布的策略。
 
 ---
 
-### Q8 · DPO 里的 β 是干什么的？调大调小分别会怎样？
-*算法对比类*
+### Q13 · DPO 里的 β 有什么作用？
+*强化学习*
 
 > **β 控制策略允许偏离参考模型多远，等价于 KL 约束强度的倒数。**
 
-- **β 小（0.01）**：约束松，学得快，但容易过拟合偏好数据、丢通用能力，严重时开始胡言乱语。
-- **β 大（0.5）**：约束紧，贴着参考模型，稳但学不动。
-- **常用 0.1**，MiniMind 默认值也是 0.1。
+**β 小（0.01）**：约束松，学得快，但容易过拟合偏好数据、丢通用能力，严重时胡言乱语。**β 大（0.5）**：约束紧，贴着参考模型，稳但学不动。**常用 0.1**，本仓库默认也是 0.1。
 
-**从 loss 形式看**：β 是 logsigmoid 输入的缩放因子。β 越大，同样的 logratio 差距越快进入 sigmoid 的饱和区，梯度越小、实际更新越保守。
+**从公式看**：β 是 logsigmoid 输入的缩放因子。β 越大，同样的 logratio 差距越快进入 sigmoid 饱和区，梯度越小、更新越保守。
 
-**可以补一句实测**：我在 64M 规模上跑 DPO 发现它完全无效 —— 权重相对变化只有 0.0055%，低于 fp16 的存储精度 0.098%，等于什么都没改。两个独立指标（复读率、奖励模型打分）一致确认无变化。**这类负结果比多报一个正结果更能说明你会做验证。**
+**补一句实测**：我在 64M 规模跑 DPO 发现完全无效 —— 权重相对变化只有 0.0055%，低于 fp16 存储精度 0.098%，等于什么都没改。两个独立指标（复读率、奖励模型打分）一致确认无变化。**这类负结果比多报一个正结果更能说明会做验证。**
 
 ---
 
-### Q9 · LoRA 的原理是什么？rank 怎么选？B 为什么初始化为 0？
-*算法对比类*
+### Q14 · KL 惩罚为什么用 `exp(r)−r−1` 而不是直接 `−r`？
+*强化学习 · 源码级*
 
-> **LoRA 假设「适配下游任务所需的权重改动是低秩的」，于是冻结原权重 W，只训练两个瘦矩阵的乘积 ΔW = B·A。**
+> **因为那是 k3 估计量 —— 它同时做到了恒非负、无偏、低方差，而简单的 k1 做不到。**
 
-`W' = W + BA`，其中 `A ∈ ℝ^(r×d)`、`B ∈ ℝ^(d×r)`。d=768、r=16 时参数量从 589,824 降到 24,576，只有 **4.2%**。
+记 `r = log π_ref − log π_θ`，三种估计量：
+`k1 = −r`：无偏但方差大，**而且可能为负**（KL 本不该为负）。
+`k2 = r²/2`：恒非负、方差小，但**有偏**。
+`k3 = exp(r) − r − 1`：**三者兼得**。
 
-**B 初始化为 0 是关键设计**：这样训练起点 ΔW = B·A = 0，模型行为与原模型完全一致，不会因为随机的适配器扰动而在训练初期崩坏。A 用高斯初始化保证有梯度流入。**如果两个都随机初始化，起点就带了一个随机扰动；两个都置零则梯度恒为零，永远学不动。**
+**为什么 k3 恒非负**：`e^r ≥ 1+r` 对所有实数成立（指数函数在 r=0 处的切线），所以 `e^r − r − 1 ≥ 0`，等号仅在两分布相同时取到。这是 John Schulman 提出的，现在是事实标准。
 
-**rank 怎么选**：任务与预训练分布越远、需要注入的新能力越多，rank 就要越大。风格适配 r=4~8 够，领域知识注入常用 16~64。
-
-**这个仓库有个值得一提的细节**：`apply_lora` 的筛选条件是 `in_features == out_features`，只给方阵挂。在 MiniMind 里只有 `q_proj` 和 `o_proj` 是 768×768，**k_proj/v_proj 因为 GQA 变成了 768×384、FFN 是 768×2432，全都挂不上**。所以实际只有 16 个模块、0.39M 参数、占 0.62%。**这与 LoRA 原论文推荐的「W_q + W_v」并不完全一致** —— 能指出这点说明真读了代码。
+**本仓库两处细节值得说**：① KL 是**加在 loss 里**而非加在 reward 里（经典 RLHF 是后者，会经 GAE 分摊到每个 token）；② **早停判据用的是 k2**（`0.5·log_ratio²`，阈值 0.25），因为早停只需要一个偏离程度的标量，k2 不用算 exp 更省。
 
 ---
 
-### Q10 · 训练出现 Loss Spike 或 NaN，怎么排查？
-*工程坑点类 · 高频*
+### Q15 · LoRA 的 B 为什么初始化为 0？rank 怎么选？
+*微调 · 高频*
+
+> **B=0 保证训练起点 ΔW = B·A = 0，模型行为与原模型完全一致，不会因为随机适配器扰动而在初期崩坏。**
+
+**为什么不能都随机**：起点就带了一个随机扰动，等于给训练好的模型加噪声。**为什么不能都置零**：`∂L/∂A = Bᵀ(...) = 0`，梯度恒为零永远学不动。**所以必须一个随机一个置零，且置零的要是输出侧的 B。**
+
+**rank 怎么选**：任务与预训练分布越远、要注入的新能力越多，rank 越大。风格适配 r=4~8 够，领域知识注入常用 16~64。
+
+**还有一个常见误解要澄清**：LoRA 省的是「梯度存储 + 优化器状态」，**不省激活值** —— 反向传播依然要穿过整个网络才能算出上游梯度。要省激活得用梯度检查点。AdamW 每个可训练参数要存两个 fp32 动量，全量微调是 511 MB，LoRA 只要 3.1 MB，**这才是省显存的大头**。
+
+---
+
+### Q16 · 你读过 MiniMind 的 LoRA 实现吗？有什么问题？
+*微调 · 源码级 · 极高区分度*
+
+> **有两处与标准 LoRA 的偏离：只给方阵挂适配器，以及没有 alpha 缩放。**
+
+**偏离一**：`apply_lora` 的筛选条件是 `in_features == out_features`。在 MiniMind 里只有 `q_proj` 和 `o_proj` 是 768×768；**k_proj/v_proj 因为 GQA 变成 768×384、FFN 是 768×2432，全都挂不上**。所以实际只有 16 个模块、393,216 参数、占 0.62%（与日志吻合）。
+
+而 **LoRA 原论文的消融结论是「只改 W_q 和 W_v 效果就很好」** —— 这里因为 GQA 漏掉了 v_proj，实际改的是 W_q 和 W_o，**与论文推荐并不一致**。
+
+**偏离二**：`forward` 是 `return self.B(self.A(x))`，**没有标准 LoRA 的 α/r 缩放**。α/r 的作用是让**换 rank 时不必重调学习率** —— r 变大时 B·A 的典型幅度也变大，除以 r 正好抵消。**没有它，把 r 从 8 改到 64 时等效更新幅度会跟着变，学习率必须重调。** 对固定 r 的单次实验无影响，但做 rank 消融会得到被混淆的结论。
+
+---
+
+### Q17 · 训练出现 Loss Spike 或 NaN，怎么排查？
+*工程坑点 · 高频*
 
 > **按「先定位是数据、还是数值、还是优化」的顺序查，从最便宜的检查做起。**
 
-**第一步：看开局 loss 对不对。** 随机初始化时 loss 应该约等于 `ln(vocab_size)`，MiniMind 是 ln(6400)=8.76。远大于说明初始化或 label 有问题；**远小于说明标签泄漏** —— 最常见的是忘了 shift，模型在预测自己。
+**第一步：看开局 loss 对不对。** 应该 ≈ `ln(vocab_size)`，MiniMind 是 8.76。远大于说明初始化或 label 有问题；**远小于说明标签泄漏** —— 最常见是忘了 shift。
 
-**第二步：定位到具体 batch。** 固定随机种子复现，把爆炸前几步的数据 dump 出来。常见元凶是超长样本、全是重复字符的脏数据、或者某条样本的 label 全是 −100（导致该 batch 的 loss 是 0/0）。
+**第二步：定位到具体 batch。** 固定种子复现，dump 爆炸前几步的数据。常见元凶是超长样本、全是重复字符的脏数据、或某条样本 label 全是 −100（该 batch 的 loss 变成 0/0）。
 
-**第三步：数值层面。** fp16 动态范围窄，注意力 logits 容易溢出 → 优先换 **bf16**；检查归一化层是否在 fp32 下计算；确认 `scaler.unscale_` 在 `clip_grad_norm_` **之前**调用（顺序反了裁剪就没有意义）。
+**第三步：数值层面。** fp16 动态范围窄 → 优先换 **bf16**；检查归一化层是否在 fp32 下计算；确认 `scaler.unscale_` 在 `clip_grad_norm_` **之前**调用（顺序反了裁剪就没意义）。
 
 **第四步：优化层面。** 降 lr、加 warmup、收紧 grad_clip。
 
-**结构层面的预防**：MiniMind 在 Q、K 上各挂了一个 RMSNorm（**QK-Norm**），专门把注意力 logits 的尺度钉住，避免 softmax 饱和引发的 spike。加上 Pre-Norm 的干净残差通路，这类问题在这个规模上基本不出现。
+**结构层面的预防**：MiniMind 在 Q、K 上各挂了一个 RMSNorm（**QK-Norm**），专门把注意力 logits 尺度钉住，避免 softmax 饱和引发 spike。加上 Pre-Norm 的干净残差通路，这类问题在这个规模基本不出现。
 
 ---
 
-### Q11 · 显存 OOM 怎么优化？按什么顺序试？
-*工程坑点类 · 高频*
+### Q18 · 显存 OOM 怎么优化？按什么顺序试？
+*工程坑点 · 高频*
 
 > **按「收益/代价」排序：先调不损失效果的（累积、精度、序列长度），再调有代价的（重计算、卸载）。**
 
-1. **梯度累积**：batch 减半、累积翻倍，等效批量不变、数学等价，几乎零代价。
-2. **bf16 混合精度**：激活显存直接减半。
-3. **缩短序列长度**：注意力显存随 S² 增长，这一项收益最大。
-4. **梯度检查点（重计算）**：用约 30% 的额外计算换掉大部分激活显存。
-5. **优化器状态卸载 / 8-bit optimizer**：AdamW 每个参数要存两个 fp32 状态，是权重的两倍。
-6. **LoRA / QLoRA**：直接把可训练参数砍到 1% 以下。
+① **梯度累积**：batch 减半、累积翻倍，等效批量不变、数学等价，几乎零代价。② **bf16**：激活显存减半。③ **缩短序列长度**：注意力显存随 S² 增长，收益最大。④ **梯度检查点**：约 30% 额外计算换掉大部分激活显存。⑤ **优化器状态卸载 / 8-bit optimizer**：AdamW 状态是权重的两倍。⑥ **LoRA / QLoRA**。
 
-**但我想强调一个更前置的问题**：在我这台机器上，**显存溢出根本不报 OOM** —— 驱动开着 system memory fallback，装不下时静默回落到内存，速度掉 4 到 20 倍。实测 bs=32 是 4.882 s/步、bs=16 是 0.242 s/步，**两个都「正常运行」，跑完的时间差 25 倍。**
+**但我想强调一个更前置的问题**：在我这台机器上，**显存溢出根本不报 OOM** —— 驱动开着 system memory fallback，装不下时静默回落到内存，速度掉 4 到 20 倍。实测 bs=32 是 4.882 s/步、bs=16 是 0.242 s/步，**两个都「正常运行」，跑完时间差 25 倍。**
 
-**识别判据**：GPU 利用率 100% + 功耗异常低（我实测 41W）+ 空闲显存不足 200MB，三者同时出现就是显存颠簸。**光看利用率会被骗，因为等 PCIe 传输也算「忙」。** 所以我写了个显存探针：真建模型、真跑 5 步前反向、读 `max_memory_reserved()`，按实测选 batch，而不是靠估算。
+**识别判据**：GPU 利用率 100% + 功耗异常低（我实测 41W）+ 空闲显存不足 200MB。**光看利用率会被骗，因为等 PCIe 传输也算「忙」。** 所以我写了个显存探针：真建模型、真跑 5 步前反向、读 `max_memory_reserved()`，按实测选 batch。
 
 ---
 
-### Q12 · 开了 Flash Attention 为什么还会 OOM？
-*工程坑点类*
+### Q19 · 开了 Flash Attention 为什么还会 OOM？
+*工程坑点 · 源码级*
 
 > **因为 SDPA 的快速路径有前提条件，条件不满足时会静默回落到朴素实现，而朴素实现的显存是 O(S²)。**
 
-看 MiniMind 的代码：`if self.flash and (seq_len > 1) and (past_key_value is None) and (attention_mask is None or all(mask==1))`。**只要带了 KV Cache，或者 attention_mask 里有 0（有 padding），就会走 else 分支**，实体化一个 `[B, H, S, S]` 的 scores 矩阵。
+MiniMind 的条件是 `if self.flash and (seq_len>1) and (past_key_value is None) and (mask is None or all(mask==1))`。**只要带了 KV Cache，或 attention_mask 里有 0（有 padding），就走 else 分支**，实体化 `[B,H,S,S]` 的 scores。
 
-**我实测过这个坑**：多轮工具调用累积到 S=2500、组大小 4 时，单层的 scores 就是 `4×8×2500²×4B = 763 MB`，8 层加反向直接 OOM。把 S 降到 1280、组大小降到 2 之后是 100 MB 才跑得动。
+**我实测过**：多轮工具调用累积到 S=2500、组大小 4 时单层 scores 就是 `4×8×2500²×4B = 763 MB`，8 层加反向直接 OOM。降到 S=1280、组大小 2 后是 100 MB 才跑得动。
 
-**加分点**：这三个配置的显存我是**先用 `B×H×S²×4` 算出来、再实测确认的**，不是一次次撞出来的。而且发现组大小从 4 降到 2 时，**每样本耗时快了 296% 而不是 100%** —— 因为 O(S²) 的注意力矩阵和显存回落是复合效应，在长序列任务上 `num_generations` 根本不是线性成本参数。
-
----
-
-### Q13 · MoE 的 aux_loss 是干什么的？怎么证明专家没坍缩？
-*架构细节类*
-
-> **aux_loss 防的是「路由器把所有 token 都送给同一个专家」—— 那样 MoE 会退化成 dense 模型，白占几倍显存。**
-
-实现是 `aux_loss = Σ(实际命中率 × 平均路由概率) × num_experts × 5e-4`，分布均匀时取最小值。**它同时惩罚「命中多」和「打分高」**，所以路由器没法靠只提高分数而不实际路由来钻空子。
-
-**但只看 aux_loss 稳定是间接证据** —— 它是个标量，稳定只说明损失没恶化，不直接说明每个专家实际分到了多少 token。**直接做法**是在 `gate` 线性层上挂前向钩子，取出路由 logits、按模型自身口径复原 top-k 分配，逐层统计。
-
-我实测的结果是：4 个专家占比 **25.9% / 25.0% / 24.9% / 24.3%**，归一化熵 1.000，8 层全部均匀，零个未使用专家。**给出这组数字，比说「aux_loss 很稳」强一个量级。**
+**加分点**：这三个配置的显存我是**先用 `B×H×S²×4` 算出来、再实测确认的**。而且发现组大小从 4 降到 2 时**每样本耗时快了 296% 而不是 100%** —— O(S²) 注意力与显存回落是复合效应，长序列任务上 `num_generations` 根本不是线性成本参数。
 
 ---
 
-### Q14 · GRPO 为什么能省掉 Critic？代价是什么？
-*算法对比类*
+### Q20 · MoE 的 aux_loss 是干什么的？怎么证明专家没坍缩？
+*架构细节*
 
-> **PPO 用 Critic 估计状态价值来当基线降方差；GRPO 换成「同一个 prompt 采 G 个回答，用这一组的均值当基线」。**
+> **aux_loss 防的是「路由器把所有 token 都送给同一个专家」—— 那样 MoE 会退化成 dense，白占几倍显存。**
 
-具体是：对每个 prompt 采样 G 个回答，各自打分后做组内标准化 `(r − mean) / std` 当作优势。**省掉一整个价值网络**，显存和训练成本都降一大截。
+实现是 `Σ(实际命中率 × 平均路由概率) × num_experts × 5e-4`，分布均匀时取最小。**它同时惩罚「命中多」和「打分高」**，所以路由器没法靠只提高分数而不实际路由来钻空子。
 
-**代价是组内样本数 G 太小时基线噪声很大。** 我在 Agentic RL 阶段因为显存所限被迫用 G=2，日志里的 `GrpStd` 抖动明显，这是必须在结论里标注的方法学代价 —— 那条结果不应该和 G=6 的 GRPO 并排当同等口径比较。
+**但只看 aux_loss 稳定是间接证据** —— 它是标量，稳定只说明损失没恶化。**直接做法**是在 `gate` 上挂前向钩子，取出路由 logits、按模型自身口径复原 top-k 分配，逐层统计。
 
-**顺带说 PPO 的实际表现**：我和上游官方权重两次完全独立的 PPO 训练，产生了两种截然不同的退化 —— 我的是 91% 采样输出答案为空，官方的是 200 道题只有 44 种不同开头、无论问什么都回同一篇散文。**结论是 PPO 在这个代码库和规模下不稳定**，而两个坏模型在复读率上恰好排全场第 1 和第 2 名。
+我实测：4 个专家占比 **25.9 / 25.0 / 24.9 / 24.3%**，归一化熵 1.000，8 层全均匀，零个未使用专家。**给出这组数字，比说「aux_loss 很稳」强一个量级。**
 
 ---
 
-### Q15 · 你怎么判断一个评测指标是不是被「刷」了？
-*方法学类 · 区分度最高*
+### Q21 · 为什么 MoE 总参 198M 却说和 64M 的 dense 可比？
+*架构细节*
+
+> **因为 top-1 路由下每个 token 只走 1 个专家，实际激活参数是 63.94M，与 dense 的 63.91M 几乎相同 —— 单步前向的计算量可比。**
+
+MoE 每层把 dense 的 MLP（5.6M）换成 gate（3072）+ 4 个专家（4×5.6M），总参涨到 198.42M；但 `num_experts_per_tok=1` 意味着每 token 只激活一个专家。`激活 = 8×(注意力1.77M + 单专家5.6M + gate) + embed 4.92M = 63.94M`。
+
+**不公平的地方要主动说**：全部专家都要常驻显存，MoE 权重文件 407MB 而 dense 只有 131MB；推理延迟实测 3.28 s/题 vs 2.0 s/题（专家路由的 scatter/gather 有开销）。
+
+**准确表述**：在同等激活计算量下，MoE 用 3 倍显存换来了留出集困惑度 12% 的下降。
+
+---
+
+### Q22 · 你怎么判断一个评测指标是不是被「刷」了？
+*方法学 · 区分度最高*
 
 > **看这个指标有没有「锚定到输入」。只审视输出长什么样的指标，原则上总能被某种退化绕过。**
 
-我在这个项目里抓到过两个「指标很好但模型是坏的」的例子，而且它们的坏法完全不同：
+我抓到过两个「指标很好但模型是坏的」的例子，坏法完全不同：
 
-- **例一**：我的 PPO 复读率 7.4% 全场最低，但 84% 的回答在 `</think>` 之后是空的，事实准确率 0.0%。**抓住它的是「回答长度」和「答案为空率」**。
+- **例一**：我的 PPO 复读率 7.4% 全场最低，但 84% 的回答在 `</think>` 之后是空的，准确率 0.0%。**抓住它的是「回答长度」和「答案为空率」。**
 - **例二**：官方 PPO 权重复读率 12.2% 全场第二，长度 417 全场最长、空答案率 0% —— **把上面两道守卫全绕过了**。但它 200 道题只产出 44 种不同开头，无论问什么都回同一篇 AI 伦理散文。
 
-**归纳出的规律**：复读率、长度、空答案率、多样性，全都只看输出的形状；相关性（答案有没有提到问题里被比较的两个对象）和准确率则把输出**与输入对照**。后两个才是难被绕过的。
+**归纳的规律**：复读率、长度、空答案率、多样性全都只看输出的形状；相关性（答案有没有提到问题里被比较的两个对象）和准确率则把输出**与输入对照**。后两个才难被绕过。
 
 **再补一条更重要的**：统计显著性保护不了你。我那个「复读率降低 78.9%、p<0.0001」是完全真实的测量、完全错误的解读。**p 值只保证你没被随机性骗到，不保证你量对了东西。**
 
 ---
 
-### Q16 · 你怎么确定实验结论不是运气？
-*方法学类*
+### Q23 · 你怎么确定实验结论不是运气？
+*方法学*
 
 > **要分别量化两种不确定性 —— 评测噪声和训练噪声，而大多数人只量了前一半。**
 
-**评测噪声**：换一批题目考，分数会怎么波动。用**配对自助法**（同一批题上比较，重采样 10000 次）。配对能消掉题目难度带来的方差，比独立比较敏感一个量级。
+**评测噪声**：换一批题目考，分数怎么波动。用**配对自助法**（同一批题上比较，重采样 10000 次）。配对能消掉题目难度带来的方差，比独立比较敏感一个量级。
 
-**训练噪声**：同配置只换随机种子重训一遍，模型会差多少。**这一半几乎没人量，因为很多训练框架根本没给做重复实验的接口** —— MiniMind 的种子就是硬编码 42 的，我加了 `--seed` 参数才做得了。
+**训练噪声**：同配置只换随机种子重训一遍，模型会差多少。**这一半几乎没人量，因为很多框架根本没给做重复实验的接口** —— MiniMind 的种子就是硬编码 42 的，我加了 `--seed` 参数才做得了。
 
-**实测结果里有个我完全没预料到的发现**：训练方差是**指标的属性**，不是模型的属性。同一批权重，复读率的种子间标准差只有 **0.55pp**，事实准确率却有 **4.36pp** —— 相差 8 倍。所以不能从一个指标外推到另一个。
+**实测有个我完全没预料到的发现**：训练方差是**指标的属性**，不是模型的属性。同一批权重，复读率的种子间标准差只有 **0.55pp**，事实准确率却有 **4.36pp** —— 相差 8 倍。**所以不能从一个指标外推到另一个。**
 
-**拿它去重新定级**：我的核心结论（策略优化降复读 18pp）在保守上界下仍有 9.3 倍标准差，稳；而两条小效应结论只有 1–2 倍标准差，**我据此撤回了它们的显著性表述**。
-
----
-
-### Q17 · 自建项目的结论怎么保证不是自娱自乐？
-*方法学类*
-
-> **找外部参考实现做对照。在我加这一步之前，项目里所有数字都是自指的 —— 我的模型对比我的另一个模型。**
-
-这留下一个从没排除过的可能：**如果我的 SFT 基线本身就训坏了，那所有「蒸馏无改善」「对齐不提准确率」的零结果，可能只是烂基线的产物。**
-
-上游发布了官方权重，其中有一对是用**和我完全相同的 mini 数据**训的。我把它们拉下来跑同一套 200 题基准，结果同数据条件下我的 SFT 复读率低 6.6pp、准确率高 22.8pp —— **管线是好的。**
-
-**但这一步还带出一个我没料到的发现**：官方用全量数据（8 倍量）训的模型，比 mini 数据版复读率低 29.8pp、准确率高 28.6pp。**换数据一项的收益，超过我全部方法收益之和。** 这给报告加了一条此前完全看不见的限制：我所有的方法结论都只在数据受限的体制下成立。
+**拿它重新定级**：核心结论（策略优化降复读 18pp）在保守上界下仍有 9.3 倍标准差，稳；两条小效应结论只有 1–2 倍，**我据此撤回了它们的显著性表述**。
 
 ---
 
-### Q18 · 为什么 MoE 的总参 198M 但你说它和 64M 的 dense 可比？
-*架构细节类*
-
-> **因为 top-1 路由下每个 token 只走 1 个专家，实际激活参数是 63.94M，与 dense 的 63.91M 几乎相同 —— 单步前向的计算量是可比的。**
-
-算一下：MoE 每层把 dense 的 MLP（5.6M）换成 gate（3072）+ 4 个专家（4×5.6M）。总参因此涨到 198.42M，但 `num_experts_per_tok=1` 意味着每个 token 只激活其中一个专家。
-
-`激活 = 8层 × (注意力 1.77M + 单专家 5.6M + gate) + embed 4.92M = 63.94M`，日志打印的 `198.42M-A63.94M` 就是这个意思。
-
-**不公平的地方要主动说**：全部专家都要常驻显存，所以 MoE 权重文件是 407MB 而 dense 只有 131MB；推理延迟我实测是 3.28 s/题 vs dense 的 2.0 s/题（专家路由的 scatter/gather 有开销）。
-
-**所以准确的表述是**：在同等激活计算量下，MoE 用 3 倍显存换来了留出集困惑度 12% 的下降。
-
----
-
-### Q19 · 预训练 loss 降到多少算收敛？怎么判断？
-*训练机制类*
-
-> **先看起点对不对：随机初始化时 loss 应该约等于 ln(vocab_size)，MiniMind 是 ln(6400)=8.76。收敛值则要看词表大小和数据，不能跨项目比。**
-
-我这里的参照：预训练降到 **1.87–1.96**，SFT 降到 **1.58**。
-
-**但比数值更重要的是怎么读它**。我实测 MoE 预训练最后 100 个采样点，**单点 loss 在 1.58 到 2.41 之间摆动，σ=0.165**。我一度根据末尾单点的 1.7075 得出「MoE 赢了 dense 的 1.87」，随后被 30 点均值 1.9440 推翻。
-
-**所以：① 报窗口均值和标准差，不报单点；② 训练 loss 不能跨阶段或跨模型比** —— 要比就在同一批留出数据上重新算。我为此专门写了个脚本，让所有模型跑完全相同的固化 batch。
-
-**还有一个坑**：跨 tokenizer 时连 PPL 都不能比，因为它是按 token 统计的，词表不同 token 数就不同。那种情况要用 BPB（Bits Per Byte）。
-
----
-
-### Q20 · 这个项目的局限是什么？你会怎么改进？
-*收尾类 · 考察诚实度*
+### Q24 · 这个项目的局限是什么？你会怎么改进？
+*收尾 · 考察诚实度*
 
 > **最大的局限是没有人工或强模型评判 —— 我所有指标都是程序化的，复读率只是生成质量的粗糙代理。**
 
-**其余几条**：
+**其余几条**：① **方差估计只有 n=2/n=3**，点估计可信但上界很宽（0.3–1.9pp）。② **所有方法结论只在数据受限体制下成立** —— 官方全量数据模型比 mini 数据好 29.8pp，超过我全部方法收益之和，换到数据充足的设定，方法之间的相对关系可能完全不同。③ **单语言、单领域**，全是中文通用对话。④ 模型本身很弱，事实准确率只有 37% —— 这是 64M 参数的固有限制。
 
-1. **方差估计只有 n=2/n=3**，点估计可信但上界很宽（0.3–1.9pp）。
-2. **所有方法结论只在数据受限体制下成立** —— 官方全量数据模型比 mini 数据好 29.8pp，超过我全部方法收益之和，换到数据充足的设定，方法之间的相对关系可能完全不同。
-3. **单语言、单领域**，全是中文通用对话，没覆盖英文、代码、长上下文。
-4. 模型本身能力很弱，事实准确率只有 37% —— 这是 64M 参数的固有限制。
-
-**如果给我更多资源，优先级是**：先把评测做实（加 LLM-as-judge、扩带格式约束的题目），而不是把模型加大。**在评测工具还查不出 5pp 差异的时候加大模型，只会得到更多「不显著」。**
+**如果有更多资源，优先级是**：先把评测做实（加 LLM-as-judge、扩带格式约束的题目），而不是把模型加大。**在评测工具还查不出 5pp 差异的时候加大模型，只会得到更多「不显著」。**
 
 ---
 
@@ -1013,9 +1460,11 @@ MiniMind 的实现在 `SFTDataset.generate_labels`：以 `<|im_start|>assistant\
 | 要点 | 一句话 |
 | --- | --- |
 | 起点 loss | ≈ ln(vocab) = ln(6400) = **8.76**，偏离说明有 bug |
+| 交叉熵 = NLL | 不是随便选的损失，它就是最大似然本身 |
 | shift | `logits[:-1]` 对 `labels[1:]`，忘了就是预测自己 |
+| Teacher Forcing | 并行训练的代价是 exposure bias，这是 RL 存在的理由 |
 | SFT mask | labels 全 −100，只填回 assistant 段（含 im_end） |
-| GQA | 压 KV 不压 Q，因为只有 KV 进缓存；`n_rep = 8/4 = 2` |
+| GQA | 压 KV 不压 Q，因为只有 KV 进缓存；n_rep = 8/4 = 2 |
 | QK-Norm | Q/K 各挂 RMSNorm，在 RoPE 之前，防 logits 爆炸 |
 | RoPE | 内积只依赖 m−n；base=1e6 拉长低频周期；YaRN 推理期外推 |
 | RMSNorm | 不减均值无偏置；内部转 fp32 再降回 |
@@ -1024,8 +1473,14 @@ MiniMind 的实现在 `SFTDataset.generate_labels`：以 `<|im_start|>assistant\
 | MoE | 198.42M 总参 / 63.94M 激活；aux_loss 系数 5e-4 |
 | LR 调度 | 余弦从 1.0 衰减到 **0.1 不到 0**，且**无 warmup** |
 | 累积顺序 | 先除 accum → backward → `unscale_` → clip → step |
-| DPO | β=0.1 控偏离；减 π_ref 防两边一起压低 |
-| LoRA | B 初始化为 0；本仓库只挂方阵 → 仅 q_proj/o_proj，0.39M |
+| 策略梯度 | `∇J = E[R·∇log π]`；减基线不改期望但降方差 |
+| PPO 的 min | 只在「走对方向走够了」时刹车，绝不在走错时刹车 |
+| GAE | 把稀疏终局奖励分摊回每个 token；λ 控偏差-方差 |
+| KL 的 k3 | `exp(r)−r−1`：恒非负 + 无偏 + 低方差，三者兼得 |
+| GRPO | 组内均值当基线，省掉 Critic；G 小则基线噪声大 |
+| CISPO | ratio 被 detach，只当权重 → REINFORCE 式而非 PPO 式 |
+| DPO | β=0.1 控偏离；减 π_ref 防两边一起压低；配分函数在相减时消掉 |
+| LoRA | B 初始化为 0；省的是优化器状态不是激活；本仓库无 α 缩放且只挂方阵 |
 | Flash 回落 | 带 KV Cache 或 mask 有 0 → 走朴素路径，显存 O(S²) |
 | sysmem fallback | 不报 OOM 只降速；判据 = 100% 利用率 + 低功耗 + 显存贴顶 |
 | 指标可信度 | 只看输出的指标会被绕过；要有锚定输入的指标 |
@@ -1035,7 +1490,7 @@ MiniMind 的实现在 `SFTDataset.generate_labels`：以 `<|im_start|>assistant\
 
 ## 相关脚本
 
-本手册第五章引用的所有实测数据，都可以用仓库里的评测套件复现：
+本手册第七章引用的所有实测数据，都可以用仓库里的评测套件复现：
 
 | 脚本 | 作用 |
 | --- | --- |

@@ -50,3 +50,4 @@ bench200_seeds.log
 out/ref_*.pth
 out/cispo_s4*.pth
 out/full_dist_s4*.pth
+bench200_s44.log
