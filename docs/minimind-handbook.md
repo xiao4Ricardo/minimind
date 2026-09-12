@@ -7,9 +7,9 @@
 
 这份手册把 MiniMind 的每一处设计拆到源码行，再拆到它背后的数学。每个公式按**「直觉 → 公式 → 逐符号 → 源码对照」**四段展开，第一次学也能跟下来。所有参数量、张量形状、超参默认值都取自本仓库实际代码，不是从论文或博客转述的通用知识。
 
-第八章的实测数据全部来自本仓库在单张 RTX 5060 8GB 上的真实训练，合计 86.4 GPU 小时，零崩溃零重拉。
+第八章的实测数据全部来自本仓库在单张 RTX 5060 8GB 上的真实训练，合计 86.4 GPU 小时，零崩溃零重拉（**怎么做到零崩溃见第十章**）。
 
-**覆盖九个训练阶段**：Tokenizer → 预训练 → SFT → DPO → PPO / GRPO / CISPO → **离线蒸馏** → **OPD 在线蒸馏** → **Agentic RL** → LoRA。其中蒸馏两章（第六章）与 Agentic RL、rollout 引擎（§5.12–5.13）是本次补齐的部分。
+**覆盖九个训练阶段**：Tokenizer → 预训练 → SFT → DPO → PPO / GRPO / CISPO → **离线蒸馏** → **OPD 在线蒸馏** → **Agentic RL** → LoRA。其中知识蒸馏（第六章）、Agentic RL 与 rollout 引擎（§5.12–5.13）、**推理与部署（第九章）**、**训练编排与工程可靠性（第十章）**是后续补齐的部分 —— 至此仓库里每一个 `.py` 都在手册中有对应位置。
 
 ---
 
@@ -31,7 +31,11 @@
 
 **第八章 · 实测参照** — [8.1 资源与耗时](#81-资源与耗时参照表) ｜ [8.2 收敛参照](#82-收敛参照) ｜ [8.3 效果对比](#83-效果对比与消融) ｜ [8.4 8GB 显存工程](#84-8gb-显存工程)
 
-**第九章 · 面试题** — [29 题与回答模板](#第九章--面试高频题与回答模板) ｜ [附：一页速查](#附一页速查)
+**第九章 · 推理与部署**〔本次新增〕 — **[9.1 KV Cache](#91-kv-cache把平方级计算降成线性)** ｜ **[9.2 四个采样旋钮](#92-四个采样旋钮逐行读-generate)** ｜ **[9.3 为什么用贪心解码](#93-为什么本项目所有评测都用贪心解码)** ｜ **[9.4 批量生成的 finished 掩码](#94-批量生成finished-掩码)** ｜ **[9.5 转换为可部署格式](#95-从-pth-到可部署scriptsconvert_modelpy)** ｜ **[9.6 OpenAI 兼容 API 与 SSE](#96-openai-兼容-api-与-sse-流式输出)**
+
+**第十章 · 工程可靠性**〔本次新增〕 — **[10.1 问题是什么](#101-问题是什么)** ｜ **[10.2 显存探针](#102-显存探针先量后跑而不是猜)** ｜ **[10.3 降级梯子](#103-降级梯子探针管不了的那一类)** ｜ **[10.4 断点续训三件套](#104-断点续训三件套)** ｜ **[10.5 看门狗](#105-看门狗38-小时无人值守)** ｜ **[10.6 为什么不用 bat](#106-为什么不用-bat两个真实踩过的坑)** ｜ **[10.7 Windows SAC 兼容层](#107-sac_compatpy一个绕不开的平台坑)** ｜ **[10.8 仓库脚本全景](#108-附仓库脚本全景)**
+
+**第十一章 · 面试题** — [34 题与回答模板](#第十一章--面试高频题与回答模板) ｜ [附：一页速查](#附一页速查)
 
 ---
 
@@ -986,6 +990,13 @@ r += reward_model.get_score(messages, answer)  # internlm2-1.8B 打分，裁到 
 >
 > **这不是「奖励函数写错了」，而是「奖励模型对这个能力段区分度不够」**，两者的修法完全不同。
 
+> **⭐ 这个结论是怎么得到的**：靠 `evals/reward_decompose.py` —— 它把每个模型的总奖励**拆成分项**逐个打印：
+> 有 `</think>` 的比例、答案为空的比例、答案长度、规则项得分、复读罚、RM 分、总奖励。
+>
+> **只看总奖励是看不出问题的**（PPO 的 +0.69 是全场最高）。**拆开才看得见「规则项拿满、RM 分也不低、但答案长度接近 0」这个矛盾组合。**
+>
+> **可复用的做法：任何复合奖励都应该有一个分项拆解脚本。** 总分是被优化的目标，分项才是诊断工具 —— 模型钻的空子一定体现在「某个分项异常高而另一个异常低」上。
+
 ## 5.12 Agentic RL：让模型学会「动手」而不只是「说话」
 
 **先用大白话说清楚它和前面的区别。**
@@ -1524,6 +1535,8 @@ teacher 的留出集 PPL 是全场最低的 11.20，看起来是最强的模型�
 
 ## 7.2 ChatML 模板
 
+模板定义在 `model/tokenizer_config.json` 的 `chat_template` 字段（Jinja2），渲染后长这样：
+
 ```
 <|im_start|>system
 你是一个知识丰富的AI助手。<|im_end|>
@@ -1596,7 +1609,7 @@ teacher 的留出集 PPL 是全场最低的 11.20，看起来是最强的模型�
 
 ## 8.3 效果对比与消融
 
-200 题基准（10 类各 20 题，贪心解码）：
+200 题基准（10 类各 20 题，**贪心解码** —— 为什么用贪心、代价是什么见 §9.3）：
 
 | 模型 | 复读率 | 事实准确率 | 答案为空 | 回复多样性 | 长度 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -1674,7 +1687,421 @@ teacher 的留出集 PPL 是全场最低的 11.20，看起来是最强的模型�
 
 ---
 
-# 第九章 · 面试高频题与回答模板
+# 第九章 · 推理、解码与部署
+
+> 前面八章全在讲**怎么把权重训出来**。这一章讲**训出来之后怎么用**：
+> 对应 `model/model_minimind.py` 的自实现 `generate`，以及 `scripts/` 下的转换与服务脚本。
+>
+> **这一章的内容在面试里出现的频率不比训练低** —— 因为大多数岗位日常接触的是推理侧。
+
+## 9.1 KV Cache：把平方级计算降成线性
+
+**大白话**：生成第 100 个词的时候，前面 99 个词的 K 和 V 早就算过了。不缓存的话每一步都要把整段重算一遍。
+
+```python
+# model/model_minimind.py · generate · L263–265
+for _ in range(max_new_tokens):
+    past_len = past_key_values[0][0].shape[1] if past_key_values else 0
+    outputs = self.forward(input_ids[:, past_len:], ...)   # ← 只把「新的那几个 token」喂进去
+    past_key_values = outputs.past_key_values
+```
+
+`input_ids[:, past_len:]` 这一个切片就是全部机关：**第一步喂整个 prompt，之后每一步只喂 1 个 token。**
+
+| | 每步前向的 token 数 | 生成 n 个 token 的总计算 |
+| --- | --- | --- |
+| 不带 cache | t（重算整段） | **O(n²)** |
+| 带 cache | **1** | **O(n)** |
+
+**代价是显存**：每个 token 要存 K 和 V。§2.4 算过，GQA 下是 `2 × 8层 × 4头 × 96 × 2B = 12 KB/token`。生成 1000 个 token 就是 12 MB —— 单条不多，但并发 100 路就是 1.2 GB，**这是推理服务并发数的硬约束**。
+
+> **⚠ 与 §2.4 那个陷阱连起来看**：SDPA 快速路径要求 `past_key_value is None`。也就是说 **带 KV Cache 的解码一定走朴素注意力分支**。这在推理时问题不大（每步 Q 只有 1 个 token，`scores` 是 `[B,H,1,S]` 而非 `[B,H,S,S]`，不是 O(S²)），但**在带 cache 的训练式前向里就是灾难**。
+
+---
+
+## 9.2 四个采样旋钮：逐行读 `generate`
+
+```python
+logits = outputs.logits[:, -1, :] / temperature            # ① 温度
+
+if repetition_penalty != 1.0:                              # ② 重复惩罚
+    seen = torch.unique(input_ids[i]); score = logits[i, seen]
+    logits[i, seen] = torch.where(score > 0, score / repetition_penalty,
+                                             score * repetition_penalty)
+
+if top_k > 0:                                              # ③ top-k
+    logits[logits < torch.topk(logits, top_k)[0][..., -1, None]] = -float('inf')
+
+if top_p < 1.0:                                            # ④ top-p（核采样）
+    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+    mask = torch.cumsum(torch.softmax(sorted_logits, -1), -1) > top_p
+    mask[..., 1:], mask[..., 0] = mask[..., :-1].clone(), 0     # ← 右移一位 + 强制保留第一个
+    logits[mask.scatter(1, sorted_indices, mask)] = -float('inf')
+
+next_token = torch.multinomial(torch.softmax(logits, -1), 1) if do_sample \
+             else torch.argmax(logits, -1, keepdim=True)   # ⑤ 采样 or 贪心
+```
+
+### ① temperature —— 和蒸馏温度是同一个操作，目的相反
+
+`logits / T` 与 §6.2 蒸馏里的 `softmax(z/T)` **是同一行代码**，但用途正好相反：
+
+| | 蒸馏里的 T | 解码里的 T |
+| --- | --- | --- |
+| 目的 | 把 teacher 分布**压平**，让学生看见暗知识 | 控制生成的**随机性** |
+| 常用值 | `T > 1`（本仓库 1.5） | `T < 1`（本仓库 0.85） |
+| 效果 | 小概率项被抬起来 | 高概率项被进一步放大，输出更确定 |
+
+**能把这两处联系起来讲，说明你理解的是「温度对 softmax 做了什么」，而不是背了两个孤立的超参。**
+
+### ② repetition_penalty —— 正负 logits 必须分开处理
+
+```python
+torch.where(score > 0, score / penalty, score * penalty)
+```
+
+**为什么不能统一除以 penalty**：logits 有正有负。正的除以 1.2 会变小（惩罚 ✓）；**负的除以 1.2 会变大**（−3 变成 −2.5，概率反而上升 —— 惩罚变成了奖励 ✗）。
+
+所以负 logit 必须**乘以** penalty 才能变得更负。**这是 HuggingFace 里也踩过的经典 bug，问到 repetition_penalty 时说出这一点区分度很高。**
+
+注意它作用在 `torch.unique(input_ids[i])` 上 —— **惩罚的是「出现过的词」，不区分出现了几次，也不区分是在 prompt 里还是生成里出现的。**
+
+### ③ top-k vs ④ top-p —— 为什么 top-p 更常用
+
+| | top-k | top-p（核采样） |
+| --- | --- | --- |
+| 规则 | 固定保留前 k 个 | 累积概率到 p 为止，**个数不固定** |
+| 分布很**尖**时（模型很确定） | 仍强行保留 k 个，把一堆垃圾词放进候选 | **自动只留几个** ✓ |
+| 分布很**平**时（模型在犹豫） | 只留 k 个，可能砍掉合理选项 | **自动多留一些** ✓ |
+
+**一句话：top-k 的截断点与分布形状无关，top-p 自适应分布形状。** 这就是 top-p 成为默认的原因。两者可以叠加（本仓库默认 `top_k=50, top_p=0.85`，先 k 后 p）。
+
+> **top-p 实现里最容易写错的一行**：
+> ```python
+> mask[..., 1:], mask[..., 0] = mask[..., :-1].clone(), 0
+> ```
+> 这是**右移一位并强制把第一个设为保留**。
+>
+> **为什么必须右移**：`cumsum > p` 标记的是「累积已经超过 p 的位置」，但**第一个超过 p 的词本身应该被保留**（正是它让累积达到 p 的）。不右移就会把它也砍掉。
+>
+> **为什么必须强制保留第一个**：如果最高概率的词本身概率就 > p（比如 p=0.85、最高词 0.9），那么第 0 位的 `cumsum` 就已经 > p，**整行会被全部 mask 成 −inf**，`multinomial` 直接报错。强制 `mask[..., 0] = 0` 保证候选集永远非空。
+
+---
+
+## 9.3 为什么本项目所有评测都用贪心解码
+
+`do_sample=False` → `torch.argmax`，**每次都选概率最高的词**。
+
+**理由只有一个，但足够硬：可复现。** 采样解码下同一个问题跑两次结果不同，而 `evals/` 里所有的配对检验（配对自助法、符号检验）都要求**同一道题在不同模型下的差异只来自模型本身**。一旦引入采样随机性，配对的前提就没了，测出来的差异有一部分是掷骰子。
+
+本项目 200 题基准全程贪心，所以 `evals/bench200_raw.json` 里的每一条输出都能逐位复现。
+
+> **⚠ 必须主动说明的口径问题**：**贪心解码会放大复读**。模型一旦进入一个高概率的循环（「因此因此因此……」），贪心永远选同一个词，采样还有概率跳出去。
+>
+> 所以 §10.3 那张表里的复读率（pretrain 62.7%、full_sft 46.0%）**是贪心口径下的数字，不是模型在实际采样部署下的表现**。
+>
+> **我没有做采样口径的对照实验**，所以不能量化这个差距有多大。能说的只是：**所有模型用的是同一个解码口径，所以横向比较是公平的；但绝对数值不可跨口径引用。**
+
+---
+
+## 9.4 批量生成：`finished` 掩码
+
+一批同时生成 6 条时，它们不会同时结束。
+
+```python
+finished = torch.zeros(input_ids.shape[0], dtype=torch.bool)
+...
+next_token = torch.where(finished.unsqueeze(-1),
+                         next_token.new_full((B, 1), eos_token_id),   # 已结束的强行填 EOS
+                         next_token)
+input_ids = torch.cat([input_ids, next_token], dim=-1)
+finished |= next_token.squeeze(-1).eq(eos_token_id)
+if finished.all(): break                                              # 全部结束才停
+```
+
+三个设计点：
+
+1. **已结束的序列继续填 EOS** —— 张量是规整的矩形，不能让某一行提前变短。填 EOS 等于变相 padding。
+2. **`finished.all()` 才 break** —— 一条结束就停会把其他序列截断。
+3. **`finished |=` 是累积的** —— 一旦置位就不再翻回去，防止后面又生成出非 EOS 把状态搞乱。
+
+> **这正是 §5.8 GRPO 和 §6.5 OPD 里 `completion_mask` 要「截到第一个 EOS」的原因**：EOS 之后那些被强行填进去的 token 不是模型真正的输出，**必须排除在 loss 和长度统计之外**。两处代码是配套的。
+
+---
+
+## 9.5 从 `.pth` 到可部署：`scripts/convert_model.py`
+
+训练存下来的 `.pth` 是**裸 `state_dict`**，没有配置、没有分词器，`from_pretrained` 加载不了。转换脚本做两件事：
+
+### 路线一：转成 MiniMind 自己的 transformers 格式
+
+```python
+MiniMindConfig.register_for_auto_class()
+MiniMindForCausalLM.register_for_auto_class("AutoModelForCausalLM")
+lm_model.save_pretrained(path)   # 把建模代码一并拷进目录
+```
+
+`register_for_auto_class` 会把**模型定义的源码**写进输出目录，配合 `trust_remote_code=True`，`AutoModelForCausalLM.from_pretrained` 就能认出这个自定义结构。
+
+### 路线二：把权重映射到 Qwen3 结构 —— 这一条更值得讲
+
+脚本还支持把权重一一映射进 `Qwen3ForCausalLM` / `Qwen3MoeForCausalLM`。
+
+**为什么要这么做**：一旦变成标准 Qwen3 结构，**vLLM、SGLang、llama.cpp、Ollama 全都能直接加载**，不需要 `trust_remote_code`、不需要往推理框架里塞自定义建模代码。
+
+**能做到的前提**是 MiniMind 的结构本来就是 LLaMA/Qwen 系的标准件：RMSNorm + RoPE + GQA + SwiGLU，层内排布一致，所以权重可以逐一对应。**「结构上不发明新东西」的工程收益，在这里变成了实打实的生态兼容性。**
+
+顺带一个版本兼容细节：transformers 5.0 把 `rope_theta` 挪进了 `rope_parameters`，脚本会把它拆回旧字段，好让低版本也能加载。
+
+---
+
+## 9.6 OpenAI 兼容 API 与 SSE 流式输出
+
+`scripts/serve_openai_api.py` 暴露 `/v1/chat/completions`，请求/响应体与 OpenAI 一致 —— **意味着任何 OpenAI SDK 客户端改个 `base_url` 就能直接连**。
+
+### 流式为什么需要「线程 + 队列」
+
+`model.generate` 是一个**阻塞的同步 for 循环**，它不会边生成边 return。要做流式就必须把它移出主线程：
+
+```python
+queue = Queue()
+streamer = CustomStreamer(tokenizer, queue)
+
+class CustomStreamer(TextStreamer):
+    def on_finalized_text(self, text, stream_end=False):
+        self.queue.put(text)              # ① 每解出一段文字就塞进队列
+        if stream_end: self.queue.put(None)   # ② None 当结束哨兵
+
+def _generate():
+    model.generate(..., streamer=streamer)    # ③ 在子线程里阻塞地跑
+
+Thread(target=_generate).start()
+# 主线程：从 queue 里取，yield 成 SSE
+```
+
+**三个角色**：`generate` 在子线程生产 → `Queue` 解耦 → 主线程消费并按 SSE 格式 `data: {json}\n\n` 往外吐。`None` 哨兵告诉消费者「生产结束了」，否则主线程会在 `queue.get()` 上永远等下去。
+
+### 响应解析：`parse_response`
+
+服务端还要把模型吐出的原始文本拆成三部分，才能符合 OpenAI 的响应结构：
+
+| 模型原始输出 | 解析成 | OpenAI 字段 |
+| --- | --- | --- |
+| `<think>...</think>` | 思考过程 | `reasoning_content` |
+| `<tool_call>{...}</tool_call>` | 工具调用 | `tool_calls[]`（含生成的 `id`） |
+| 剩下的 | 正文 | `content` |
+
+**注意 `<tool_call>` 的解析用的是同一套正则**（§5.12 训练时也是这个正则）—— **训练时怎么解析，部署时就得怎么解析**。两边不一致的话，训练里拿了高分的格式在线上可能根本解析不出来。
+
+其余三个脚本：`chat_api.py`（调用上面这个服务的最小客户端示例）、`web_demo.py`（Streamlit 网页界面）、`eval_toolcall.py`（工具调用能力的单独评测，支持接 OpenAI 兼容端点来评）。
+
+> **`eval_toolcall.py` 正好补上了 §5.12 承认的那个缺口** —— Agentic RL 训完只用通用问答评测是不够的，工具调用能力需要自己的评测集。**这个脚本仓库里有，本项目没有系统地跑它，属于明确的待办。**
+
+---
+
+# 第十章 · 训练编排与工程可靠性
+
+> **「86.4 GPU 小时、九个阶段、零崩溃零重拉」不是运气，是这一章的四个机制堆出来的。**
+> 对应 `queue_runner.py`、`probe_mem.py`、`agent_watchdog.py`、`trainer_utils.lm_checkpoint`、`dataset/sac_compat.py`。
+>
+> 面试时这部分常常比算法更能体现「能不能独立把事情跑完」。
+
+## 10.1 问题是什么
+
+单卡训练最大的敌人不是算法，是**中断**：
+
+| 中断形态 | 后果（没有防护时） |
+| --- | --- |
+| 显存装不下 | 这张卡**不报 OOM**，静默回落系统内存，慢 4–20 倍（§8.4） |
+| 进程崩溃 | 半夜挂掉，第二天发现白等一整天 |
+| 一个阶段跑完 | 要人手动敲下一条命令，夜里没人盯就空转 |
+| 断点重启 | 从 epoch 头重跑，前面几小时白费 |
+
+四个机制各对付一条。
+
+---
+
+## 10.2 显存探针：先量后跑，而不是猜
+
+```
+python probe_mem.py --stage distill --candidates 16,12,8,6,4
+```
+
+做法很朴素但关键：**真建模型、真跑几步前向反向、读 `torch.cuda.max_memory_reserved()`**，从大到小试候选 batch，挑第一个不触发回退的。最后一行固定输出 `CHOSEN_BS=<n>` 供 `queue_runner.py` 读取。
+
+> **为什么不能靠公式估**：激活显存还受 PyTorch 分配器的碎片、cuDNN 的临时工作区、autocast 的缓存副本影响，公式只能给数量级。**而这张卡的代价函数是断崖式的** —— 差一点点就从 0.24 秒/步掉到 4.88 秒/步。这种情况下实测比估算便宜得多。
+
+**面试时「我先算后验」比「我调小了 batch」高一个层次** —— 前者说明你知道哪些量可以算、哪些必须测。
+
+---
+
+## 10.3 降级梯子：探针管不了的那一类
+
+```python
+# queue_runner.py · OPD 阶段的配置
+# rollout 带 KV cache，显存行为和固定 seq 的前向不一样，探针模拟不可靠，
+# 所以改用降级梯子兜底：装不下就收缩生成规模重来。
+"ladder": ["", "--num_generations 4", "--num_generations 4 --max_gen_len 192",
+           "--num_generations 2 --max_gen_len 192"],
+"retries_per_rung": 3,
+```
+
+**为什么 RL 阶段用不了探针**：探针跑的是固定序列长度的前向反向，而 rollout 的显存取决于**模型实际会生成多长**——这是训练中才知道的、每步都在变的量（§9.1 的 KV Cache 随生成长度线性增长）。模拟不出来，就只能**失败后降级**。
+
+机制：同一档参数重试 3 次都失败 → 自动降到下一档、收缩生成规模 → 最多 `MAXRETRY=30` 次。
+
+> **梯子的一个关键设计**：**它只动生成参数（`num_generations`、`max_gen_len`），绝不动 `batch_size`。**
+>
+> 因为 `iters = ceil(rows / batch_size)` 决定了完成标记 `Epoch:[1/1](19502/19502)`。一旦改 batch_size，步数变了、完成标记对不上，`--from_resume` 记录的 step 也失去意义 —— **之前跑的进度全作废**。
+>
+> **「降级时哪些参数可以动、哪些动了会破坏续训」是设计这类兜底逻辑时最该先想清楚的事。**
+
+---
+
+## 10.4 断点续训：三件套
+
+### ① `lm_checkpoint` 保存的不只是权重
+
+```python
+resume_data = {
+    'model': state_dict, 'optimizer': optimizer.state_dict(),
+    'epoch': epoch, 'step': step,
+    'world_size': dist.get_world_size() if dist.is_initialized() else 1,
+    'wandb_id': wandb_id,          # 续训时接回同一条实验曲线
+}
+# scaler / scheduler 通过 **kwargs 一并存
+```
+
+**只存权重是不够的**：AdamW 的一阶/二阶动量丢了，恢复后前几百步等于在用错误的动量方向更新；LR 调度器的 step 丢了，学习率会跳回起点。
+
+### ② 原子写：`.tmp` + `os.replace`
+
+```python
+torch.save(state_dict, ckp_path + '.tmp')
+os.replace(ckp_path + '.tmp', ckp_path)      # 同盘 rename 是原子的
+```
+
+**为什么必须这样**：`torch.save` 直接写目标路径时，如果正好在写到一半崩溃/断电，**得到的是一个损坏的检查点，而它已经覆盖了上一个好的**。先写临时文件再原子重命名，保证任何时刻磁盘上的那个文件要么是旧的完整版、要么是新的完整版。
+
+**一个 64M 模型存 131 MB 只要一两秒，但这一两秒里崩溃的概率乘以几百次保存，就不是零了。**
+
+### ③ `SkipBatchSampler`：跳过已经吃过的 batch
+
+```python
+setup_seed(args.seed + epoch)
+indices = torch.randperm(len(train_ds)).tolist()      # ① 种子决定的固定打乱
+batch_sampler = SkipBatchSampler(indices, args.batch_size, skip=start_step)
+```
+
+`SkipBatchSampler` 的 `__iter__` 攒够一个 batch 后，前 `skip_batches` 个直接丢弃不 yield。
+
+> **这里有一个必须成立的前提**：**重启后的数据顺序必须和第一次完全一致**，否则「跳过前 N 个 batch」跳掉的是另一批数据。
+>
+> 保证它的是 `setup_seed(seed + epoch)` + `torch.randperm` —— **同一个 epoch 号永远产生同一个排列**。用 `seed + epoch` 而不是固定 `seed`，是为了让不同 epoch 的打乱顺序不同。
+>
+> 这也解释了 §6.3 那个陷阱为什么严重：**`SFTDataset` 内部还有 `random` 调用**，那部分不受这个种子控制。所以「跳过的 batch 索引」是确定的，但「那条样本被渲染成什么文字」不是。**对续训无所谓（本来就是要往下走），但对配对评测是致命的。**
+
+---
+
+## 10.5 看门狗：38 小时无人值守
+
+Agentic RL 是临时追加的单任务，不需要阶段编排，但 38 小时必须有崩溃恢复。`agent_watchdog.py` 做的事只有一件：
+
+```
+循环：
+  进程还在？→ 等
+  进程没了 → 日志里有完成标记？→ 结束
+                   ↓ 没有
+             按原参数 + --from_resume 1 重新拉起（最多 40 次）
+```
+
+**「进程没了」和「任务完成了」是两回事** —— 这是看门狗最容易写错的地方。判定完成用的是**日志里的最后一步标记**（`(39988/39988)`），与 `queue_runner` 完全同一个口径，而不是进程退出码（训练脚本被 OOM killer 杀掉时退出码未必非零）。
+
+---
+
+## 10.6 为什么不用 `.bat`：两个真实踩过的坑
+
+`queue_runner.py` 是从早先的 `chain_moe.bat` 改过来的，换掉的原因写在文件头：
+
+1. **cmd 按 OEM 代码页解析 `.bat`** —— 文件里的 UTF-8 中文注释会破坏后续的变量展开，表现为「某一行之后所有 `%VAR%` 都取不到值」，而且**不报错**。
+2. **cmd 的 `>>` 重定向全程持有日志句柄，且不授予写共享** —— 另一个进程往同一个日志追加会**静默失败**：不报错、不输出、也不写入。多阶段编排里各阶段共用一个日志时，这个坑非常难查。
+
+> **这条经验可以一般化**：**脚本语言的「静默失败」比崩溃危险得多。** 崩溃会停下来让你看见，静默失败让你带着错误的数据继续跑几个小时。选工具时，「出错时会不会吭声」应该是一个硬指标。
+
+---
+
+## 10.7 `sac_compat.py`：一个绕不开的平台坑
+
+**现象**：Windows Smart App Control 处于强制模式时，会拦截 pyarrow 里未签名的 `_dataset.cp311-win_amd64.pyd`（事件日志 CodeIntegrity 3033/3077），于是 `import pyarrow.dataset` 抛 ImportError，连带整个 `import datasets` 失败 —— **即便文件本身完好、昨天还能跑**。
+
+**为什么不能直接关掉 SAC**：SAC 没有单文件白名单，而且**一旦关闭必须重装系统才能重新开启**。这是一条不可逆的路。
+
+**解法**：注入一个占位模块。
+
+```python
+stub = types.ModuleType("pyarrow.dataset")
+stub.__getattr__ = _getattr          # 任何属性都返回一个占位类
+sys.modules["pyarrow.dataset"] = stub
+```
+
+**可行性的依据**：`datasets` 只在 `folder_based_builder` 的**类型注解**里用到 `pyarrow.dataset`；本项目实际走的 `load_dataset('json', ...)` 依赖的是 `pyarrow.json`，没被拦截。所以占位模块只要能让 import 过去就够了。
+
+> **⭐ 这个 workaround 里最值得讲的一个决定**：
+>
+> 占位类**在被真正调用时才抛 `RuntimeError`，而不是静默返回 None 或空对象**。
+>
+> ```python
+> def _raise(*args, **kwargs):
+>     raise RuntimeError(f"pyarrow.dataset.{name} 被 Windows Smart App Control 拦截，无可用实现。…")
+> ```
+>
+> 如果占位类静默返回空值，某天真的有代码路径用到 Arrow Dataset，**它会拿到错误的数据继续跑下去**，而你完全不知道。**让 workaround 在越界时大声失败，是写兼容层的基本纪律** —— 和 §10.6 那条经验是同一个道理。
+>
+> 另外这个模块还保留了上游 issue #771 的用途：**必须在 `import torch` 之前导入**，以固定 pyarrow 与 torch 的 DLL 加载顺序。在没被拦截的机器上 `_install_stub()` 直接返回 `False`，行为完全不变 —— **兼容层不应该改变正常路径的行为。**
+
+---
+
+## 10.8 附：仓库脚本全景
+
+手册写到这里，**仓库里每一个 `.py` 都有了对应位置**。按职责归类：
+
+| 职责 | 脚本 | 去哪看 |
+| --- | --- | --- |
+| **模型定义** | `model/model_minimind.py` | 第二章 · §9.1–9.4 |
+| | `model/model_lora.py` | 第四章 |
+| **数据** | `dataset/lm_dataset.py` | §3.4 · §7.3 |
+| **训练** | `trainer/train_tokenizer.py` | §1.1 · §7.1 |
+| | `trainer/train_pretrain.py` | 第三章 |
+| | `trainer/train_full_sft.py` | §3.4 · §3.6 |
+| | `trainer/train_dpo.py` | §5.10 |
+| | `trainer/train_ppo.py` | §5.5–5.7 |
+| | `trainer/train_grpo.py` | §5.8 · §5.9 · §5.11 |
+| | `trainer/train_agent.py` | §5.12 |
+| | `trainer/train_distillation.py` | §6.2 · §6.3 |
+| | `trainer/train_opd.py` | §6.5 |
+| **训练支撑** | `trainer/rollout_engine.py` | §5.13 |
+| | `trainer/trainer_utils.py` | §3.5 · §10.4 |
+| **推理与部署** | `scripts/convert_model.py` | §9.5 |
+| | `scripts/serve_openai_api.py` | §9.6 |
+| | `scripts/chat_api.py` · `web_demo.py` | §9.6 |
+| | `scripts/eval_toolcall.py` | §9.6（**未系统跑，待办**） |
+| | `eval_llm.py` | §2.3（可试 YaRN 外推） |
+| **评测** | `evals/eval_bench200.py` · `analyze_bench200.py` | §8.3 |
+| | `evals/score_correctness.py` | §8.3 |
+| | `evals/reward_decompose.py` | **§5.11（PPO 那个洞就是它挖出来的）** |
+| | `evals/reward_curve_rebuild.py` | §7.2 |
+| | `evals/expert_routing.py` | §2.6 |
+| | `evals/eval_distill20.py` | 第六章 |
+| | `eval_ppl.py` · `evals/paired_ppl_test.py` | §8.2 · §8.3 |
+| **方差量化** | `evals/seed_variance_runner.py` · `seed_variance_rl.py` | §8.3 |
+| **工程编排** | `probe_mem.py` | §10.2 |
+| | `queue_runner.py` | §10.3 |
+| | `agent_watchdog.py` | §10.5 |
+| | `dataset/sac_compat.py` | §10.7 |
+
+---
+
+# 第十一章 · 面试高频题与回答模板
 
 > 每题给出**一句话主线**（加粗，先说结论）+ 展开。建议按主线背，展开部分理解后用自己的话讲。
 
@@ -2103,12 +2530,101 @@ response_mask.extend([0] * len(obs_delta))   # 工具返回的 → 无梯度
 
 ---
 
+### Q30 · top-k 和 top-p 有什么区别？为什么 top-p 更常用？
+*推理解码 · 高频*
+
+> **top-k 的截断点与分布形状无关，top-p 自适应分布形状 —— 这就是全部区别。**
+
+top-k 固定保留概率最高的 k 个词。**问题是 k 是死的**：模型很确定时（分布很尖），强行保留 k 个会把一堆垃圾词放进候选；模型在犹豫时（分布很平），只留 k 个又可能砍掉合理选项。
+
+top-p（核采样）按**累积概率**截断：把词按概率排序，累加到 p 为止。分布尖时自动只留几个，分布平时自动多留一些。**候选集大小随分布自适应。**
+
+两者可以叠加，本仓库默认 `top_k=50, top_p=0.85`，先 k 后 p。
+
+**加分点 —— 实现里最容易写错的一行**：
+
+```python
+mask = torch.cumsum(torch.softmax(sorted_logits, -1), -1) > top_p
+mask[..., 1:], mask[..., 0] = mask[..., :-1].clone(), 0     # 右移一位 + 强制保留第一个
+```
+
+**为什么右移**：`cumsum > p` 标记的是「累积已超过 p 的位置」，但**第一个超过 p 的词本身应该保留**（正是它让累积达到 p）。不右移会把它也砍掉。
+
+**为什么强制保留第 0 位**：若最高概率的词本身就 > p（p=0.85、最高词 0.9），第 0 位的 cumsum 就已超过 p，**整行会被 mask 成 −inf，`multinomial` 直接报错**。
+
+---
+
+### Q31 · repetition_penalty 为什么要区分 logits 的正负？
+*推理解码 · 区分度高*
+
+> **因为 logits 有正有负。正的除以 penalty 会变小（惩罚），负的除以 penalty 会变大 —— 惩罚变成了奖励。**
+
+```python
+torch.where(score > 0, score / penalty, score * penalty)
+```
+
+举例 `penalty=1.2`：正 logit `3.0 / 1.2 = 2.5`（下降 ✓）；负 logit 若也除，`−3.0 / 1.2 = −2.5`（**上升 ✗**）。所以负 logit 必须**乘以** penalty 才能更负。**这是 HuggingFace 里也踩过的经典 bug。**
+
+**再补一个实现层面的观察**：它作用在 `torch.unique(input_ids)` 上 —— **惩罚的是「出现过的词」，不区分出现了几次，也不区分是在 prompt 里还是在生成里出现的**。所以 prompt 里的词也会被压低概率，长 prompt 场景下这个副作用不小。
+
+---
+
+### Q32 · KV Cache 省了什么？代价是什么？
+*推理 · 必答题*
+
+> **把生成 n 个 token 的总计算量从 O(n²) 降到 O(n)，代价是显存随生成长度线性增长。**
+
+不缓存时，生成第 t 个 token 要对前面 t 个 token 全部重算一遍 K/V，累计 O(n²)。缓存后每步只需前向 **1 个** 新 token。代码里就是一个切片：
+
+```python
+past_len = past_key_values[0][0].shape[1] if past_key_values else 0
+outputs = self.forward(input_ids[:, past_len:], ...)    # 只喂新 token
+```
+
+**代价**：MiniMind 的 GQA 配置下是 `2 × 8层 × 4头 × 96 × 2B = 12 KB/token`。单条生成 1000 token 只要 12 MB，但**并发 100 路就是 1.2 GB —— 这是推理服务并发数的硬约束**，也正是 GQA/MQA 存在的理由（§2.4）。
+
+**还有一个源码级的坑值得说**：MiniMind 的 SDPA 快速路径要求 `past_key_value is None`，**所以带 KV Cache 的解码一定走朴素注意力分支**。推理时问题不大（每步 Q 只有 1 个 token，scores 是 `[B,H,1,S]` 不是 `[B,H,S,S]`），但如果在训练里做带 cache 的前向，就会退化成 O(S²)。
+
+---
+
+### Q33 · 你的评测为什么全用贪心解码？有什么代价？
+*方法学 · 考察口径意识*
+
+> **为了可复现 —— 配对显著性检验要求同一道题在不同模型下的差异只来自模型本身，一旦引入采样随机性，测出来的差异里就有一部分是掷骰子。**
+
+本项目 200 题基准全程 `do_sample=False`，所以 `evals/bench200_raw.json` 里每条输出都能逐位复现，配对自助法和符号检验的前提才成立。
+
+**代价必须主动说**：**贪心会放大复读** —— 模型一旦进入高概率循环，贪心永远选同一个词，而采样还有概率跳出去。所以我报的复读率（pretrain 62.7%、full_sft 46.0%）**是贪心口径下的数字，不代表实际采样部署下的表现**。
+
+**而且我没有做采样口径的对照实验**，所以无法量化这个差距。能说的只有：**所有模型用同一个解码口径，横向比较是公平的；但绝对数值不可跨口径引用。**
+
+**这类「口径声明」比多报一个指标更重要** —— 它决定了别人能不能正确使用你的数字。
+
+---
+
+### Q34 · 你的训练怎么做到 86 小时零崩溃的？
+*工程 · 考察独立交付能力*
+
+> **四个机制：显存探针定 batch、失败降级梯子、原子检查点 + 跳过式续训、看门狗。**
+
+**① 显存探针**（`probe_mem.py`）：这张卡显存不够时**不报 OOM，静默回落系统内存**，慢 4–20 倍（bs=32 是 4.88 s/步，bs=16 是 0.24 s/步）。所以训练前真建模型跑几步，读 `max_memory_reserved()` 挑 batch，而不是估。
+
+**② 降级梯子**（`queue_runner.py`）：RL 阶段的显存取决于模型实际生成多长，探针模拟不出来，改成失败后自动收缩生成规模重试。**关键设计是梯子只动生成参数、绝不动 batch_size** —— 因为 `iters = ceil(rows/bs)` 决定完成标记，改了 batch_size 之前的进度就全作废了。
+
+**③ 检查点**：存的不只是权重，还有 optimizer 动量、scaler、scheduler、epoch/step、wandb run id。写入用 `.tmp` + `os.replace` **原子重命名**，避免写到一半崩溃把上一个好的检查点覆盖成损坏文件。续训用 `SkipBatchSampler` 跳过已消费的 batch，**前提是 `setup_seed(seed+epoch) + randperm` 保证重启后数据顺序完全一致**。
+
+**④ 看门狗**：进程没了就按原参数 `--from_resume 1` 重新拉起。**判定「完成」用日志里的最后一步标记，不用退出码** —— 被 OOM killer 杀掉时退出码未必非零。
+
+**如果只让我说一条**：这台机器上**显存溢出不报错**，所以整套机制的核心不是「崩了怎么恢复」，而是**「怎么让静默失败变成能被发现的失败」**。同样的道理也体现在 `sac_compat.py` 的占位类上 —— 它在被真正调用时抛异常，而不是静默返回空值。
+
+---
+
 ### Q24 · 这个项目的局限是什么？你会怎么改进？
 *收尾 · 考察诚实度*
 
 > **最大的局限是没有人工或强模型评判 —— 我所有指标都是程序化的，复读率只是生成质量的粗糙代理。**
 
-**其余几条**：⓪ **蒸馏与 OPD 的 teacher 选错了** —— 我用留出集 PPL 挑 teacher，而 PPL 低不代表生成质量好，13.3+4.3 GPU 小时没换来任何提升（详见 Q29）。① **方差估计只有 n=2/n=3**，点估计可信但上界很宽（0.3–1.9pp）。② **所有方法结论只在数据受限体制下成立** —— 官方全量数据模型比 mini 数据好 29.8pp，超过我全部方法收益之和，换到数据充足的设定，方法之间的相对关系可能完全不同。③ **单语言、单领域**，全是中文通用对话。④ 模型本身很弱，事实准确率只有 37% —— 这是 64M 参数的固有限制。
+**其余几条**：⓪ **蒸馏与 OPD 的 teacher 选错了** —— 我用留出集 PPL 挑 teacher，而 PPL 低不代表生成质量好，13.3+4.3 GPU 小时没换来任何提升（详见 Q29）。① **方差估计只有 n=2/n=3**，点估计可信但上界很宽（0.3–1.9pp）。② **所有方法结论只在数据受限体制下成立** —— 官方全量数据模型比 mini 数据好 29.8pp，超过我全部方法收益之和，换到数据充足的设定，方法之间的相对关系可能完全不同。③ **单语言、单领域**，全是中文通用对话；而且 Agentic RL 只用通用问答评测，**仓库里有 `scripts/eval_toolcall.py` 但我没有系统地跑它** —— 工具调用能力至今没有自己的评测集。④ 模型本身很弱，事实准确率只有 37% —— 这是 64M 参数的固有限制。
 
 **如果有更多资源，优先级是**：先把评测做实（加 LLM-as-judge、扩带格式约束的题目），而不是把模型加大。**在评测工具还查不出 5pp 差异的时候加大模型，只会得到更多「不显著」。**
 
@@ -2149,13 +2665,20 @@ response_mask.extend([0] * len(obs_delta))   # 工具返回的 → 无梯度
 | Agentic RL | 与 GRPO 同一个 loss，唯一区别是**工具返回的 token 必须 mask 掉梯度** |
 | PPL vs 生成 | PPL 在 teacher forcing 下测、生成质量在自由生成下测，**可以反向动** |
 | 选 teacher | 用你最终关心的指标选，别用 PPL 这种代理指标 |
+| KV Cache | 把生成的总计算从 O(n²) 降到 O(n)；代价 12 KB/token，决定并发上限 |
+| top-k vs top-p | top-k 截断点与分布无关；top-p 自适应分布形状，所以是默认 |
+| top-p 实现 | mask 要**右移一位**且强制保留第 0 位，否则候选可能被清空 |
+| repetition_penalty | 正 logit 除、负 logit 乘 —— 统一除会把惩罚变成奖励 |
+| 贪心解码 | 评测用它是为了可复现；代价是放大复读，绝对值不可跨口径引用 |
+| 零崩溃四件套 | 显存探针 + 降级梯子 + 原子检查点/跳过式续训 + 看门狗 |
+| 静默失败 | 比崩溃危险得多 —— 显存回退、cmd 重定向、占位类都要做到「越界就吭声」 |
 | 两种噪声 | 评测噪声（配对自助法）+ 训练噪声（多种子重训） |
 
 ---
 
 ## 相关脚本
 
-本手册第八章引用的所有实测数据，都可以用仓库里的评测套件复现：
+本手册第八章引用的所有实测数据，都可以用仓库里的评测套件复现（**全部为贪心解码，口径见 §9.3**）：
 
 | 脚本 | 作用 |
 | --- | --- |
@@ -2164,8 +2687,17 @@ response_mask.extend([0] * len(obs_delta))   # 工具返回的 → 无梯度
 | `evals/score_correctness.py` | 准确率、指令遵循、相关性、回复多样性四道守卫 |
 | `evals/expert_routing.py` | MoE 专家路由的逐层命中分布与熵 |
 | `evals/paired_ppl_test.py` | 留出集 PPL 的配对显著性检验 |
+| `evals/reward_decompose.py` | **奖励分项拆解**：规则项 / 复读罚 / RM 分分开看（§5.11） |
+| `evals/eval_distill20.py` | 蒸馏三方对比：基线 / 离线蒸馏 / OPD / MoE 教师（第六章） |
+| `eval_ppl.py` | 同一批留出数据上直接量各模型 loss / PPL（§8.2 的口径来源） |
+| `eval_llm.py` | 交互式对话／批量问答，支持 `inference_rope_scaling` 试 YaRN 外推（§2.3） |
 | `evals/reward_curve_rebuild.py` | 从检查点重建奖励曲线（含校准对照） |
 | `evals/seed_variance_runner.py` · `seed_variance_rl.py` | 多种子重训，量化训练方差 |
-| `probe_mem.py` | 显存探针，实测选 batch size |
+| `probe_mem.py` | 显存探针，实测选 batch size（§10.2） |
+| `queue_runner.py` · `agent_watchdog.py` | 阶段编排、降级梯子与崩溃重拉（§10.3、§10.5） |
+| `scripts/convert_model.py` | `.pth` → transformers / Qwen3 结构（§9.5） |
+| `scripts/serve_openai_api.py` · `chat_api.py` · `web_demo.py` | OpenAI 兼容服务、客户端与网页 Demo（§9.6） |
+| `scripts/eval_toolcall.py` | 工具调用能力评测（**本项目未系统跑，属待办**） |
+| `dataset/sac_compat.py` | Windows SAC 拦截 pyarrow 的兼容层（§10.7） |
 
 详见 [`evals/README.md`](../evals/README.md)。
